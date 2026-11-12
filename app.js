@@ -474,7 +474,7 @@
       <div class="strip">${strip}</div>
       <div class="holehead">
         <button class="icon" data-a="prevHole" ${idx === 0 ? 'disabled' : ''} aria-label="Previous hole">‹</button>
-        <div><span class="hbig">Hole ${h.n}</span><small>Par ${h.par} · SI ${h.si}</small></div>
+        <div><span class="hbig">Hole ${h.n}</span><small>Par ${h.par}${h.y ? ` · ${h.y} yds` : ''} · SI ${h.si}</small></div>
         <button class="icon" data-a="nextHole" ${idx === holes.length - 1 ? 'disabled' : ''} aria-label="Next hole">›</button>
       </div>
       ${state.meId ? `<div class="seg wide">
@@ -673,7 +673,7 @@
       const st = state.setup, c = st.course;
       state.error = '';
       const cname = String(c.name || '').trim();
-      const holes = c.holes.map(h => ({ n: h.n, par: Number(h.par), si: Number(h.si) }));
+      const holes = c.holes.map(h => Object.assign({ n: h.n, par: Number(h.par), si: Number(h.si) }, h.y ? { y: Number(h.y) } : {}));
       const sis = holes.map(h => h.si);
       const players = st.players.map(p => ({ name: String(p.name || '').trim(), handicap: parseHc(p.hc) })).filter(p => p.name || !Number.isNaN(p.handicap));
       if (!cname) state.error = 'Give the course a name.';
