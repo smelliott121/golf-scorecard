@@ -305,3 +305,8 @@ select.input.grp { background-image: none; padding-right: 6px; }
 .course-fixed dd { margin: 2px 0 0; font: 700 22px/1 var(--serif); font-variation-settings: "opsz" 6; }
 .item-r { display: flex; align-items: center; gap: 10px; }
 .chev { font-size: 26px; line-height: 1; color: var(--brass); }
+.recent { display: flex; align-items: center; border-top: 1px solid var(--line); }
+.recent:first-child { border-top: 0; }
+.recent .item { border-top: 0; flex: 1; min-width: 0; }
+.recent .icon.sm { margin-right: 8px; }
+.btn.danger { background: transparent; border-color: #e3c3c1; color: var(--red); }

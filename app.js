@@ -61,6 +61,15 @@
     return s;
   }
   const keyOf = (pid, hole) => pid + ':' + hole;
+  const ROUND_COLS = 'id,code,name,course_name,holes,created_at';
+  function genToken() {
+    const a = crypto.getRandomValues(new Uint8Array(24));
+    return Array.from(a, x => x.toString(16).padStart(2, '0')).join('');
+  }
+  const isOwner = code => !!store.get('gs:owner:' + code, null);
+  function forgetRound(code) {
+    store.set('gs:recent', store.get('gs:recent', []).filter(x => x.code !== code));
+  }
   function makeHoles(n) {
     return Array.from({ length: n }, (_, i) => ({ n: i + 1, par: 4, si: '' }));
   }
@@ -179,7 +188,7 @@
 
 
   async function fetchRound(code) {
-    const { data: round, error } = await sb.from('rounds').select('*').eq('code', code).maybeSingle();
+    const { data: round, error } = await sb.from('rounds').select(ROUND_COLS).eq('code', code).maybeSingle();
     if (error) throw error;
     if (!round) return null;
     const [{ data: players, error: e1 }, { data: scores, error: e2 }] = await Promise.all([
@@ -196,7 +205,7 @@
     state.busy = true; state.error = ''; render();
     try {
       const res = await fetchRound(code);
-      if (!res) { state.error = `No round found with code ${code}.`; state.view = 'home'; return; }
+      if (!res) { forgetRound(code); state.error = `No round found with code ${code}. It may have been deleted.`; state.view = 'home'; return; }
       state.round = res.round;
       state.players = res.players;
       state.confirmed = {};
@@ -222,7 +231,7 @@
     if (!state.round) return;
     try {
       const res = await fetchRound(state.round.code);
-      if (!res) return;
+      if (!res) { const c = state.round.code; forgetRound(c); actions.home(); toast('Round deleted', `Round ${c} no longer exists.`); return; }
       state.players = res.players;
       const fresh = {};
       res.scores.forEach(s => { fresh[keyOf(s.player_id, s.hole)] = s.strokes; });
@@ -350,10 +359,13 @@
       ${state.error ? `<p class="err">${esc(state.error)}</p>` : ''}
       ${recent.length ? `<h2 class="sub">Your recent rounds</h2>
       <div class="list">${recent.map(r => `
-        <button class="item" data-a="open" data-code="${esc(r.code)}">
-          <div><b>${esc(r.name || r.course)}</b><small>${esc(r.course)} · ${esc(r.date)}</small></div>
-          <span class="chip">${esc(r.code)}</span>
-        </button>`).join('')}</div>` : ''}
+        <div class="recent">
+          <button class="item" data-a="open" data-code="${esc(r.code)}">
+            <div><b>${esc(r.name || r.course)}</b><small>${esc(r.date)} · code ${esc(r.code)}${isOwner(r.code) ? ' · you started it' : ''}</small></div>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+          <button class="icon sm" data-a="removeRecent" data-code="${esc(r.code)}" aria-label="${isOwner(r.code) ? 'Delete' : 'Remove'} round ${esc(r.code)}">✕</button>
+        </div>`).join('')}</div>` : ''}
     </main>`;
   }
 
@@ -681,6 +693,7 @@
       </div>
       <h2>Round</h2>
       <button class="btn ghost" data-a="changeMe">Change who I am</button>
+      ${isOwner(state.round.code) ? `<button class="btn danger" data-a="deleteRound">Delete this round</button>` : ''}
       <button class="btn ghost" data-a="home">Leave round</button>
       <button class="btn primary" data-a="closeSheet">Done</button>
     </div>`;
@@ -716,7 +729,9 @@
       try {
         let round = null;
         for (let i = 0; i < 5 && !round; i++) {
-          const { data, error } = await sb.from('rounds').insert({ code: genCode(), name: String(st.name || '').trim(), course_name: cname, holes }).select().single();
+          const owner = genToken();
+          const { data, error } = await sb.from('rounds').insert({ code: genCode(), name: String(st.name || '').trim(), course_name: cname, holes, owner_token: owner }).select(ROUND_COLS).single();
+          if (!error) store.set('gs:owner:' + data.code, owner);
           if (!error) round = data;
           else if (error.code !== '23505') throw error;
         }
@@ -815,6 +830,23 @@
       Object.keys(state.confirmed).forEach(k => { if (k.startsWith(p.id + ':')) delete state.confirmed[k]; });
       if (state.meId === p.id) { state.meId = null; store.del('gs:me:' + state.round.id); }
       render();
+    },
+    async deleteRound(el) {
+      const code = el.dataset.code || (state.round && state.round.code);
+      const token = store.get('gs:owner:' + code, null);
+      if (!code || !token) return;
+      if (!confirm(`Delete round ${code} and all its scores for everyone? This can't be undone.`)) return;
+      const { data, error } = await sb.rpc('delete_round', { p_code: code, p_token: token });
+      if (error || !data) { toast('Not deleted', error ? 'No signal? Try again.' : 'Only the phone that started the round can delete it.', 'blob'); return; }
+      store.del('gs:owner:' + code);
+      forgetRound(code);
+      if (state.round && state.round.code === code) actions.home(); else render();
+      toast('Round deleted', `Round ${code} has been removed for everyone.`);
+    },
+    removeRecent(el) {
+      const code = el.dataset.code;
+      if (isOwner(code)) { actions.deleteRound(el); return; }
+      forgetRound(code); render();
     },
     openSheet() { state.sheet = true; render(); },
     closeSheet() { state.sheet = false; render(); },

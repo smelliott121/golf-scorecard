@@ -40,6 +40,7 @@ alter table public.scores  enable row level security;
 create policy "read courses"   on public.courses for select to anon, authenticated using (true);
 create policy "add courses"    on public.courses for insert to anon, authenticated with check (true);
 create policy "read rounds"    on public.rounds  for select to anon, authenticated using (true);
+-- owner_token (added later) is hidden: only listed columns are readable, and delete_round(code, token) removes a round.
 create policy "add rounds"     on public.rounds  for insert to anon, authenticated with check (true);
 create policy "read players"   on public.players for select to anon, authenticated using (true);
 create policy "add players"    on public.players for insert to anon, authenticated with check (true);
