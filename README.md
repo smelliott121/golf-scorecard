@@ -42,3 +42,5 @@ Phone notifications can be enabled for when the app is in the background. On iPh
 - `scoring.js` holds all the handicap and leaderboard maths with no dependencies.
 
 There's no sign-in: anyone with a round's code can view and score that round.
+
+Fonts: Bodoni Moda and Jost, both under the SIL Open Font License (see `fonts/`).

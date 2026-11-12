@@ -120,10 +120,12 @@
   function toast(title, body, type) {
     const el = document.createElement('div');
     el.className = 'toast ' + (type || '');
+    el.addEventListener('click', () => el.remove());
     el.innerHTML = `<b>${esc(title)}</b>${body ? `<span>${esc(body)}</span>` : ''}`;
+    while ($toasts.children.length >= 2) $toasts.firstElementChild.remove();
     $toasts.appendChild(el);
     requestAnimationFrame(() => el.classList.add('in'));
-    setTimeout(() => { el.classList.remove('in'); setTimeout(() => el.remove(), 300); }, 4500);
+    setTimeout(() => { el.classList.remove('in'); setTimeout(() => el.remove(), 300); }, 3800);
   }
   function fireAlerts(list) {
     const st = state.settings;
@@ -331,19 +333,19 @@
     <header class="hero">
       <img class="wordmark" src="radar.png" alt="Radar">
       <div class="rule"><span></span><img src="goose.png" alt=""><span></span></div>
-      <p>Live scoring · Net leaderboard</p>
+      <p>Live scores for your group, hole by hole.</p>
     </header>
     <main class="pad">
       <button class="btn primary big" data-a="newRound" ${state.busy ? 'disabled' : ''}>Start a new round</button>
       <div class="card">
-        <label class="lbl" for="joinCode">Join a round</label>
+        <label class="lbl" for="joinCode">Have a round code?</label>
         <div class="row">
           <input id="joinCode" class="input code" maxlength="8" placeholder="CODE" autocapitalize="characters" autocomplete="off" spellcheck="false">
-          <button class="btn" data-a="join" ${state.busy ? 'disabled' : ''}>Join</button>
+          <button class="btn dark" data-a="join" ${state.busy ? 'disabled' : ''}>Join round</button>
         </div>
       </div>
       ${state.error ? `<p class="err">${esc(state.error)}</p>` : ''}
-      ${recent.length ? `<h2 class="sub">Recent rounds</h2>
+      ${recent.length ? `<h2 class="sub">Your recent rounds</h2>
       <div class="list">${recent.map(r => `
         <button class="item" data-a="open" data-code="${esc(r.code)}">
           <div><b>${esc(r.name || r.course)}</b><small>${esc(r.course)} · ${esc(r.date)}</small></div>
@@ -464,8 +466,10 @@
     </header>
     <main class="pad tabbed">${body}</main>
     <nav class="tabs">
-      ${[['score', 'Score'], ['board', 'Leaderboard'], ['card', 'Card']].map(([k, l]) =>
-        `<button class="${state.tab === k ? 'on' : ''}" data-a="tab" data-v="${k}">${l}</button>`).join('')}
+      ${[['score', 'Score', '<path d="M7 21V4"/><path d="M7 4l11 4-11 4"/><ellipse cx="12" cy="21" rx="8" ry="1.6"/>'],
+         ['board', 'Leaderboard', '<path d="M4 20h16"/><rect x="5" y="11" width="4" height="9"/><rect x="10" y="6" width="4" height="14"/><rect x="15" y="14" width="4" height="6"/>'],
+         ['card', 'Card', '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/>']].map(([k, l, ic]) =>
+        `<button class="${state.tab === k ? 'on' : ''}" data-a="tab" data-v="${k}" aria-current="${state.tab === k ? 'page' : 'false'}"><svg viewBox="0 0 24 24" aria-hidden="true">${ic}</svg><span>${l}</span></button>`).join('')}
     </nav>
     ${state.sheet ? renderSheet() : ''}`;
   }
@@ -489,25 +493,42 @@
       const v = m[keyOf(p.id, h.n)];
       const recv = S.strokesReceived(p.handicap, ranks[idx], holes.length);
       const row = board.find(b => b.player.id === p.id);
-      const shots = recv > 0 ? `<span class="shots">${'●'.repeat(Math.min(recv, 4))}</span> ${recv} shot${recv > 1 ? 's' : ''}` : recv < 0 ? `gives ${-recv}` : 'no shot';
+      const shots = recv > 0 ? `<span class="shots" aria-hidden="true">${'●'.repeat(Math.min(recv, 4))}</span>${recv} shot${recv > 1 ? 's' : ''} here` : recv < 0 ? `Gives ${-recv} back` : 'No shot here';
+      const runV = row && row.thru ? (state.mode === 'stableford' ? row.points : state.mode === 'index' ? row.netByIndex : row.upfront) : null;
       return `
       <div class="entry">
-        <div class="who"><b>${esc(p.name)}</b><small>HC ${fmtHc(p.handicap)} · ${shots}</small>
-          <small class="run">${row ? `${S.scoreText(row, state.mode)} thru ${row.thru}` : ''}${v != null ? ` · <em>${S.scoreName(v, h.par)}</em>` : ''}</small></div>
+        <div class="who">
+          <b>${esc(p.name)}</b>
+          <small>HC ${fmtHc(p.handicap)} <span class="sep"></span> ${shots}</small>
+          <small class="run">${row && row.thru ? `<span class="${state.mode === 'stableford' ? '' : toParClass(runV)}">${S.scoreText(row, state.mode)}</span> after ${row.thru}` : 'Not started'}</small>
+        </div>
         <div class="stepper">
-          <button data-a="dec" data-p="${p.id}" aria-label="One less">−</button>
-          <button class="val ${scoreClass(v, h.par)}" data-a="tapScore" data-p="${p.id}" aria-label="Score">${v != null ? v : '–'}</button>
-          <button data-a="inc" data-p="${p.id}" aria-label="One more">+</button>
+          <button data-a="dec" data-p="${p.id}" aria-label="One less for ${esc(p.name)}">−</button>
+          <div class="valwrap">
+            <button class="val ${scoreClass(v, h.par)}" data-a="tapScore" data-p="${p.id}" aria-label="${v != null ? 'Clear score' : 'Set par'} for ${esc(p.name)}">${v != null ? v : '–'}</button>
+            <span class="vname">${v != null ? S.scoreName(v, h.par) : 'Tap for par'}</span>
+          </div>
+          <button data-a="inc" data-p="${p.id}" aria-label="One more for ${esc(p.name)}">+</button>
         </div>
       </div>`;
     }).join('');
     return `
-      <div class="strip">${strip}</div>
-      <div class="holehead">
-        <button class="icon" data-a="prevHole" ${idx === 0 ? 'disabled' : ''} aria-label="Previous hole">‹</button>
-        <div><span class="hbig">Hole ${h.n}</span><small>Par ${h.par}${h.y ? ` · ${h.y} yds` : ''} · SI ${h.si}</small></div>
-        <button class="icon" data-a="nextHole" ${idx === holes.length - 1 ? 'disabled' : ''} aria-label="Next hole">›</button>
-      </div>
+      <section class="hole-hero">
+        <div class="hh-top">
+          <button class="hh-nav" data-a="prevHole" ${idx === 0 ? 'disabled' : ''} aria-label="Previous hole">‹</button>
+          <div class="hh-main">
+            <span class="hh-label">Hole</span>
+            <span class="hh-num">${h.n}</span>
+          </div>
+          <button class="hh-nav" data-a="nextHole" ${idx === holes.length - 1 ? 'disabled' : ''} aria-label="Next hole">›</button>
+        </div>
+        <dl class="hh-meta">
+          <div><dt>Par</dt><dd>${h.par}</dd></div>
+          ${h.y ? `<div><dt>Yards</dt><dd>${h.y}</dd></div>` : ''}
+          <div><dt>Stroke index</dt><dd>${h.si}</dd></div>
+        </dl>
+        <div class="strip" role="navigation" aria-label="Holes">${strip}</div>
+      </section>
       ${state.meId ? `<div class="seg wide">
         <button class="${state.scope === 'me' ? 'on' : ''}" data-a="scope" data-v="me">Just me</button>
         <button class="${state.scope === 'group' ? 'on' : ''}" data-a="scope" data-v="group">My group · G${mg}</button></div>` : ''}
@@ -522,9 +543,9 @@
           <button class="btn primary" data-a="addPartner">Add</button>
         </div>
       </details>` : `<p class="muted tip">Group ${mg} is a full four-ball.</p>`) : ''}
-      <p class="muted tip">Tap the number for par, then − / + to adjust. Saves automatically.</p>
-      <button class="btn primary" data-a="nextHole" ${idx === holes.length - 1 ? 'disabled' : ''}>Next hole ›</button>
-      <h2 class="sub">Leaderboard</h2>
+      ${idx < holes.length - 1 ? `<button class="btn primary big next" data-a="nextHole">On to the ${S.ordinal(holes[idx + 1].n)}</button>` : `<button class="btn primary big next" data-a="tab" data-v="card">See the full card</button>`}
+      <p class="muted tip">Scores save as you tap and appear on everyone's phone.</p>
+      <div class="sub-row"><h2 class="sub">Standings</h2><button class="link" data-a="tab" data-v="board">Full leaderboard</button></div>
       ${boardTable(board, true)}`;
   }
 
@@ -586,7 +607,7 @@
       <div class="seg wide">${Object.keys(MODES).map(k => `<button class="${state.mode === k ? 'on' : ''}" data-a="mode" data-v="${k}">${MODES[k][0]}</button>`).join('')}</div>
       <p class="muted">${MODES[state.mode][1]}</p>
       <div class="leaders">
-        <div class="leaders-title"><img src="radar.png" alt=""><span>Leaders</span></div>
+        <div class="leaders-title"><img src="radar.png" alt="Radar"><span>Leaders</span></div>
         ${boardTable(board, false)}
       </div>
       <div class="hb-wrap">
