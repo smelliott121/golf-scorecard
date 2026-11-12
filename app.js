@@ -1,0 +1,795 @@
+(() => {
+  'use strict';
+  const S = window.Scoring;
+  const CFG = window.SCORECARD_CONFIG;
+  const sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey);
+  const $app = document.getElementById('app');
+  const $toasts = document.getElementById('toasts');
+
+  // ---------- storage (best effort) ----------
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ignore */ } },
+    del(k) { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } }
+  };
+
+  const DEFAULT_SETTINGS = { alerts: true, notify: false, vibrate: true, good: true, blobs: true, lead: true, finish: true };
+
+  const state = {
+    view: 'home',            // home | setup | who | round
+    round: null,
+    players: [],
+    confirmed: {},           // "playerId:hole" -> strokes (as the server has it)
+    local: {},               // pending edits not yet saved: key -> strokes | null
+    meId: null,
+    tab: 'score',            // score | board | card
+    hole: 1,
+    mode: store.get('gs:mode', 'upfront'),
+    everyone: false,
+    live: false,
+    channel: null,
+    courses: [],
+    setup: null,
+    settings: Object.assign({}, DEFAULT_SETTINGS, store.get('gs:settings', {})),
+    sheet: false,
+    busy: false,
+    error: ''
+  };
+
+  const timers = {};
+  let swReg = null;
+
+  // ---------- helpers ----------
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmtHc = h => (h < 0 ? '+' + (-h) : String(h));
+  function parseHc(v) {
+    v = String(v == null ? '' : v).trim();
+    if (!v) return NaN;
+    let plus = false;
+    if (v[0] === '+') { plus = true; v = v.slice(1); }
+    const n = Number(v);
+    if (!Number.isInteger(n)) return NaN;
+    return plus ? -n : n;
+  }
+  const ALPH = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  function genCode() {
+    const a = crypto.getRandomValues(new Uint8Array(6));
+    let s = '';
+    for (const x of a) s += ALPH[x % ALPH.length];
+    return s;
+  }
+  const keyOf = (pid, hole) => pid + ':' + hole;
+  function makeHoles(n) {
+    return Array.from({ length: n }, (_, i) => ({ n: i + 1, par: 4, si: '' }));
+  }
+  const holeByN = n => state.round.holes.find(h => h.n === n);
+  const parTotal = holes => holes.reduce((a, h) => a + Number(h.par || 0), 0);
+  const shareUrl = code => location.origin + location.pathname + '?r=' + code;
+
+  function scoresFrom(map) {
+    return Object.keys(map).map(k => {
+      const i = k.lastIndexOf(':');
+      return { player_id: k.slice(0, i), hole: Number(k.slice(i + 1)), strokes: map[k] };
+    }).filter(s => s.strokes != null);
+  }
+  function mergedMap() {
+    const m = Object.assign({}, state.confirmed);
+    for (const k of Object.keys(state.local)) {
+      if (state.local[k] == null) delete m[k]; else m[k] = state.local[k];
+    }
+    return m;
+  }
+  const boardOf = (map, mode) => S.leaderboard(state.players, state.round.holes, scoresFrom(map), mode || state.mode);
+
+  function scoreClass(strokes, par) {
+    if (strokes == null) return '';
+    const d = strokes - par;
+    if (d <= -2) return 'eagle';
+    if (d === -1) return 'birdie';
+    if (d === 0) return 'par';
+    if (d === 1) return 'bogey';
+    return 'dbl';
+  }
+  const toParClass = v => (v < 0 ? 'under' : v > 0 ? 'over' : 'even');
+
+  // ---------- alerts ----------
+  function toast(title, body, type) {
+    const el = document.createElement('div');
+    el.className = 'toast ' + (type || '');
+    el.innerHTML = `<b>${esc(title)}</b>${body ? `<span>${esc(body)}</span>` : ''}`;
+    $toasts.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('in'));
+    setTimeout(() => { el.classList.remove('in'); setTimeout(() => el.remove(), 300); }, 4500);
+  }
+  function fireAlerts(list) {
+    const st = state.settings;
+    if (!st.alerts) return;
+    const allowed = list.filter(a => st[a.type] !== false);
+    if (!allowed.length) return;
+    allowed.forEach(a => toast(a.title, a.body, a.type));
+    if (st.vibrate && navigator.vibrate) navigator.vibrate(allowed.some(a => a.type === 'good') ? [80, 60, 80] : 120);
+    if (st.notify && document.visibilityState === 'hidden' && 'Notification' in window && Notification.permission === 'granted') {
+      allowed.forEach(a => {
+        const opts = { body: a.body, icon: 'icon.svg', badge: 'icon.svg', tag: a.type + ':' + a.title, data: { url: shareUrl(state.round.code) } };
+        if (swReg && swReg.showNotification) swReg.showNotification(a.title, opts);
+        else { try { new Notification(a.title, opts); } catch (e) { /* ignore */ } }
+      });
+    }
+  }
+  async function enableNotifications() {
+    if (!('Notification' in window)) {
+      toast('Not supported here', 'On iPhone, add the app to your Home Screen first, then enable notifications.');
+      return;
+    }
+    const p = await Notification.requestPermission();
+    state.settings.notify = p === 'granted';
+    store.set('gs:settings', state.settings);
+    toast(p === 'granted' ? 'Notifications on' : 'Notifications blocked',
+      p === 'granted' ? 'You\'ll get alerts while the app is open in the background.' : 'You can change this in your browser settings.');
+    render();
+  }
+
+  // ---------- data ----------
+  function applyConfirmed(pid, hole, strokes, silent) {
+    const k = keyOf(pid, hole);
+    const prev = k in state.confirmed ? state.confirmed[k] : null;
+    if (prev === strokes) return;
+    const before = state.round ? boardOf(state.confirmed) : null;
+    if (strokes == null) delete state.confirmed[k]; else state.confirmed[k] = strokes;
+    if (!silent && strokes != null && before) {
+      const after = boardOf(state.confirmed);
+      const h = holeByN(hole);
+      if (h) fireAlerts(S.eventAlerts(before, after, { player_id: pid, hole, strokes, par: h.par }, state.mode));
+    }
+    if (state.view === 'round') render();
+  }
+
+  async function loadCourses() {
+    const { data } = await sb.from('courses').select('*').order('name');
+    state.courses = data || [];
+  }
+
+  async function fetchRound(code) {
+    const { data: round, error } = await sb.from('rounds').select('*').eq('code', code).maybeSingle();
+    if (error) throw error;
+    if (!round) return null;
+    const [{ data: players, error: e1 }, { data: scores, error: e2 }] = await Promise.all([
+      sb.from('players').select('*').eq('round_id', round.id).order('created_at'),
+      sb.from('scores').select('player_id,hole,strokes').eq('round_id', round.id)
+    ]);
+    if (e1 || e2) throw (e1 || e2);
+    return { round, players: players || [], scores: scores || [] };
+  }
+
+  async function openRound(code) {
+    code = String(code || '').trim().toUpperCase();
+    if (!code) return;
+    state.busy = true; state.error = ''; render();
+    try {
+      const res = await fetchRound(code);
+      if (!res) { state.error = `No round found with code ${code}.`; state.view = 'home'; return; }
+      state.round = res.round;
+      state.players = res.players;
+      state.confirmed = {};
+      res.scores.forEach(s => { state.confirmed[keyOf(s.player_id, s.hole)] = s.strokes; });
+      state.local = {};
+      state.meId = store.get('gs:me:' + res.round.id, null);
+      if (state.meId && !state.players.some(p => p.id === state.meId)) state.meId = null;
+      state.hole = nextHoleFor(state.meId);
+      state.tab = 'score';
+      rememberRound(res.round);
+      history.replaceState(null, '', '?r=' + res.round.code);
+      state.view = state.meId || store.get('gs:spectate:' + res.round.id, false) ? 'round' : 'who';
+      subscribe();
+    } catch (e) {
+      state.error = 'Couldn\'t load the round — check your signal and try again.';
+      state.view = 'home';
+    } finally {
+      state.busy = false; render();
+    }
+  }
+
+  async function resync() {
+    if (!state.round) return;
+    try {
+      const res = await fetchRound(state.round.code);
+      if (!res) return;
+      state.players = res.players;
+      const fresh = {};
+      res.scores.forEach(s => { fresh[keyOf(s.player_id, s.hole)] = s.strokes; });
+      state.confirmed = fresh;
+      render();
+    } catch (e) { /* offline; try later */ }
+  }
+
+  function subscribe() {
+    if (state.channel) sb.removeChannel(state.channel);
+    const rid = state.round.id;
+    const flt = `round_id=eq.${rid}`;
+    const onScore = p => {
+      const r = p.new;
+      if (!r || r.round_id !== rid) return;
+      applyConfirmed(r.player_id, r.hole, r.strokes, false);
+    };
+    const onPlayer = p => {
+      const r = p.new;
+      if (!r || r.round_id !== rid) return;
+      const i = state.players.findIndex(x => x.id === r.id);
+      if (i >= 0) state.players[i] = r; else { state.players.push(r); if (r.id !== state.meId) toast(`${r.name} joined`, `Playing off ${fmtHc(r.handicap)}`); }
+      render();
+    };
+    state.channel = sb.channel('round-' + rid)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'scores', filter: flt }, onScore)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'scores', filter: flt }, onScore)
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'scores' }, p => {
+        const o = p.old;
+        if (o && o.round_id === rid) applyConfirmed(o.player_id, o.hole, null, true);
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'players', filter: flt }, onPlayer)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'players', filter: flt }, onPlayer)
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'players' }, p => {
+        const o = p.old;
+        if (!o || o.round_id !== rid) return;
+        state.players = state.players.filter(x => x.id !== o.id);
+        render();
+      })
+      .subscribe(status => {
+        const was = state.live;
+        state.live = status === 'SUBSCRIBED';
+        if (state.live && !was) resync();
+        if (was !== state.live) render();
+      });
+  }
+
+  function rememberRound(r) {
+    const list = store.get('gs:recent', []).filter(x => x.code !== r.code);
+    list.unshift({ code: r.code, name: r.name, course: r.course_name, date: new Date(r.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) });
+    store.set('gs:recent', list.slice(0, 8));
+  }
+
+  function nextHoleFor(pid) {
+    if (!state.round) return 1;
+    const m = mergedMap();
+    const ids = pid ? [pid] : state.players.map(p => p.id);
+    const h = state.round.holes.find(h => ids.some(id => m[keyOf(id, h.n)] == null));
+    return h ? h.n : state.round.holes[state.round.holes.length - 1].n;
+  }
+
+  // Save a score after the taps settle, so + + + doesn't fire three alerts.
+  function setScore(pid, hole, strokes) {
+    const k = keyOf(pid, hole);
+    state.local[k] = strokes;
+    render();
+    clearTimeout(timers[k]);
+    timers[k] = setTimeout(() => saveScore(pid, hole), 900);
+  }
+  async function saveScore(pid, hole) {
+    const k = keyOf(pid, hole);
+    if (!(k in state.local)) return;
+    const strokes = state.local[k];
+    let error;
+    if (strokes == null) {
+      ({ error } = await sb.from('scores').delete().eq('player_id', pid).eq('hole', hole));
+    } else {
+      ({ error } = await sb.from('scores').upsert({
+        player_id: pid, round_id: state.round.id, hole, strokes, updated_at: new Date().toISOString()
+      }, { onConflict: 'player_id,hole' }));
+    }
+    if (error) {
+      toast('Not saved', 'No signal? Will retry in a few seconds.', 'blob');
+      timers[k] = setTimeout(() => saveScore(pid, hole), 5000);
+      return;
+    }
+    if (state.local[k] === strokes) delete state.local[k];
+    applyConfirmed(pid, hole, strokes, strokes == null);
+  }
+
+  // ---------- render ----------
+  function render() {
+    // keep focus/typing intact across live re-renders
+    const a = document.activeElement;
+    const keep = a && a.id && (a.tagName === 'INPUT') ? { id: a.id, v: a.value, s: a.selectionStart, e: a.selectionEnd } : null;
+    let html = '';
+    if (state.view === 'home') html = renderHome();
+    else if (state.view === 'setup') html = renderSetup();
+    else if (state.view === 'who') html = renderWho();
+    else html = renderRound();
+    $app.innerHTML = html;
+    if (keep) {
+      const el = document.getElementById(keep.id);
+      if (el) { el.value = keep.v; el.focus(); try { el.setSelectionRange(keep.s, keep.e); } catch (e) { /* ignore */ } }
+    }
+  }
+
+  function renderHome() {
+    const recent = store.get('gs:recent', []);
+    return `
+    <header class="hero">
+      <div class="hero-mark"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="30" y="8" width="3" height="44" rx="1.5" fill="currentColor"/><path d="M33 9 L52 16 L33 23Z" fill="#d9a92b"/><ellipse cx="32" cy="54" rx="20" ry="5" fill="#1f6b4f"/></svg></div>
+      <h1>Scorecard Live</h1>
+      <p>Everyone scores on their own phone. The net leaderboard updates as you go.</p>
+    </header>
+    <main class="pad">
+      <button class="btn primary big" data-a="newRound" ${state.busy ? 'disabled' : ''}>Start a new round</button>
+      <div class="card">
+        <label class="lbl" for="joinCode">Join a round</label>
+        <div class="row">
+          <input id="joinCode" class="input code" maxlength="8" placeholder="CODE" autocapitalize="characters" autocomplete="off" spellcheck="false">
+          <button class="btn" data-a="join" ${state.busy ? 'disabled' : ''}>Join</button>
+        </div>
+      </div>
+      ${state.error ? `<p class="err">${esc(state.error)}</p>` : ''}
+      ${recent.length ? `<h2 class="sub">Recent rounds</h2>
+      <div class="list">${recent.map(r => `
+        <button class="item" data-a="open" data-code="${esc(r.code)}">
+          <div><b>${esc(r.name || r.course)}</b><small>${esc(r.course)} · ${esc(r.date)}</small></div>
+          <span class="chip">${esc(r.code)}</span>
+        </button>`).join('')}</div>` : ''}
+    </main>`;
+  }
+
+  function renderSetup() {
+    const st = state.setup, c = st.course;
+    const editable = st.courseId === 'new' || st.editing;
+    const sel = `<select class="input" data-f="courseId">
+        <option value="new" ${st.courseId === 'new' ? 'selected' : ''}>+ New course</option>
+        ${state.courses.map(x => `<option value="${x.id}" ${st.courseId === x.id ? 'selected' : ''}>${esc(x.name)} (${x.holes.length} holes)</option>`).join('')}
+      </select>`;
+    const grid = `
+      <div class="holes">
+        <div class="hrow head"><span>Hole</span><span>Par</span><span>SI</span></div>
+        ${c.holes.map((h, i) => `
+        <div class="hrow">
+          <span class="hn">${h.n}</span>
+          <div class="seg sm">${[3, 4, 5].map(p => `<button type="button" class="${Number(h.par) === p ? 'on' : ''}" data-a="setPar" data-i="${i}" data-v="${p}">${p}</button>`).join('')}</div>
+          <input class="input si" inputmode="numeric" data-f="si" data-i="${i}" value="${esc(h.si)}" placeholder="–" aria-label="Stroke index hole ${h.n}">
+        </div>`).join('')}
+      </div>`;
+    return `
+    <header class="bar"><button class="icon" data-a="home" aria-label="Back">‹</button><div class="bar-t"><b>New round</b></div></header>
+    <main class="pad">
+      <div class="card">
+        <label class="lbl">Round name <span class="muted">(optional)</span></label>
+        <input class="input" data-f="name" placeholder="Saturday medal" value="${esc(st.name)}">
+      </div>
+      <div class="card">
+        <label class="lbl">Course</label>
+        ${sel}
+        ${editable ? `
+          <input class="input mt" data-f="cname" placeholder="Course name" value="${esc(c.name)}">
+          <div class="row mt between">
+            <span class="lbl0">Holes</span>
+            <div class="seg">${[9, 18].map(n => `<button type="button" class="${c.holes.length === n ? 'on' : ''}" data-a="holeCount" data-v="${n}">${n}</button>`).join('')}</div>
+          </div>
+          ${grid}
+          <p class="muted">Par ${parTotal(c.holes)} · SI is the stroke index on the card (1 = hardest). It decides where handicap shots fall.</p>
+          <label class="check"><input type="checkbox" data-f="saveCourse" ${st.saveCourse ? 'checked' : ''}> Save this course for next time</label>
+        ` : `
+          <p class="muted mt">${c.holes.length} holes · Par ${parTotal(c.holes)}</p>
+          <button class="btn ghost sm" data-a="editHoles">Check / edit holes</button>
+        `}
+      </div>
+      <div class="card">
+        <label class="lbl">Players <span class="muted">— name and playing handicap (+2 for a plus handicap)</span></label>
+        ${st.players.map((p, i) => `
+          <div class="prow">
+            <input class="input" data-f="pname" data-i="${i}" placeholder="Name" value="${esc(p.name)}" autocomplete="off">
+            <input class="input hc" data-f="phc" data-i="${i}" placeholder="HC" inputmode="numeric" value="${esc(p.hc)}">
+            ${st.players.length > 1 ? `<button class="icon sm" data-a="rmSetupPlayer" data-i="${i}" aria-label="Remove">✕</button>` : '<span class="icon sm"></span>'}
+          </div>`).join('')}
+        <button class="btn ghost sm" data-a="addSetupPlayer">+ Add player</button>
+        <p class="muted">More people can join later with the round code.</p>
+      </div>
+      ${state.error ? `<p class="err">${esc(state.error)}</p>` : ''}
+      <button class="btn primary big" data-a="startRound" ${state.busy ? 'disabled' : ''}>${state.busy ? 'Creating…' : 'Tee off'}</button>
+    </main>`;
+  }
+
+  function shareBox() {
+    const r = state.round;
+    return `
+      <div class="share">
+        <div><small>Round code</small><b class="codebig">${esc(r.code)}</b></div>
+        <button class="btn sm" data-a="share">Share link</button>
+      </div>`;
+  }
+
+  function renderWho() {
+    const r = state.round;
+    return `
+    <header class="bar"><button class="icon" data-a="home" aria-label="Home">‹</button>
+      <div class="bar-t"><b>${esc(r.name || r.course_name)}</b><small>${esc(r.course_name)}</small></div></header>
+    <main class="pad">
+      ${shareBox()}
+      <h2 class="sub">Who are you?</h2>
+      <div class="list">${state.players.map(p => `
+        <button class="item" data-a="pickMe" data-id="${p.id}"><b>${esc(p.name)}</b><span class="chip">HC ${fmtHc(p.handicap)}</span></button>`).join('')}
+      </div>
+      <div class="card">
+        <label class="lbl">Not on the list? Add yourself</label>
+        <div class="row">
+          <input id="meName" class="input" placeholder="Name" autocomplete="off">
+          <input id="meHc" class="input hc" placeholder="HC" inputmode="numeric">
+          <button class="btn primary" data-a="addMe">Add</button>
+        </div>
+      </div>
+      ${state.error ? `<p class="err">${esc(state.error)}</p>` : ''}
+      <button class="btn ghost" data-a="spectate">Just watching</button>
+    </main>`;
+  }
+
+  function renderRound() {
+    const r = state.round;
+    const me = state.players.find(p => p.id === state.meId);
+    let body = '';
+    if (state.tab === 'score') body = renderScore();
+    else if (state.tab === 'board') body = renderBoard();
+    else body = renderCard();
+    return `
+    <header class="bar">
+      <button class="icon" data-a="home" aria-label="Home">‹</button>
+      <div class="bar-t"><b>${esc(r.name || r.course_name)}</b><small><span class="dot ${state.live ? 'on' : ''}"></span>${state.live ? 'Live' : 'Connecting…'} · ${esc(r.course_name)}${me ? ' · ' + esc(me.name) : ''}</small></div>
+      <button class="chip code-chip" data-a="share">${esc(r.code)}</button>
+      <button class="icon" data-a="openSheet" aria-label="Settings">⚙︎</button>
+    </header>
+    <main class="pad tabbed">${body}</main>
+    <nav class="tabs">
+      ${[['score', 'Score'], ['board', 'Leaderboard'], ['card', 'Card']].map(([k, l]) =>
+        `<button class="${state.tab === k ? 'on' : ''}" data-a="tab" data-v="${k}">${l}</button>`).join('')}
+    </nav>
+    ${state.sheet ? renderSheet() : ''}`;
+  }
+
+  function renderScore() {
+    const holes = state.round.holes;
+    const h = holeByN(state.hole) || holes[0];
+    const idx = holes.indexOf(h);
+    const ranks = S.siRanks(holes);
+    const m = mergedMap();
+    const board = boardOf(m);
+    const list = (state.everyone || !state.meId) ? state.players : state.players.filter(p => p.id === state.meId);
+    const strip = holes.map(x => {
+      const done = state.players.length && state.players.every(p => m[keyOf(p.id, x.n)] != null);
+      const mine = state.meId && m[keyOf(state.meId, x.n)] != null;
+      return `<button class="hchip ${x.n === h.n ? 'on' : ''} ${done ? 'done' : mine ? 'mine' : ''}" data-a="goHole" data-v="${x.n}">${x.n}</button>`;
+    }).join('');
+    const rows = list.map(p => {
+      const v = m[keyOf(p.id, h.n)];
+      const recv = S.strokesReceived(p.handicap, ranks[idx], holes.length);
+      const row = board.find(b => b.player.id === p.id);
+      const shots = recv > 0 ? `<span class="shots">${'●'.repeat(Math.min(recv, 4))}</span> ${recv} shot${recv > 1 ? 's' : ''}` : recv < 0 ? `gives ${-recv}` : 'no shot';
+      return `
+      <div class="entry">
+        <div class="who"><b>${esc(p.name)}</b><small>HC ${fmtHc(p.handicap)} · ${shots}</small>
+          <small class="run">${row ? `${S.scoreText(row, state.mode)} thru ${row.thru}` : ''}${v != null ? ` · <em>${S.scoreName(v, h.par)}</em>` : ''}</small></div>
+        <div class="stepper">
+          <button data-a="dec" data-p="${p.id}" aria-label="One less">−</button>
+          <button class="val ${scoreClass(v, h.par)}" data-a="tapScore" data-p="${p.id}" aria-label="Score">${v != null ? v : '–'}</button>
+          <button data-a="inc" data-p="${p.id}" aria-label="One more">+</button>
+        </div>
+      </div>`;
+    }).join('');
+    return `
+      <div class="strip">${strip}</div>
+      <div class="holehead">
+        <button class="icon" data-a="prevHole" ${idx === 0 ? 'disabled' : ''} aria-label="Previous hole">‹</button>
+        <div><span class="hbig">Hole ${h.n}</span><small>Par ${h.par} · SI ${h.si}</small></div>
+        <button class="icon" data-a="nextHole" ${idx === holes.length - 1 ? 'disabled' : ''} aria-label="Next hole">›</button>
+      </div>
+      ${state.meId ? `<div class="seg wide">
+        <button class="${!state.everyone ? 'on' : ''}" data-a="everyone" data-v="0">Just me</button>
+        <button class="${state.everyone ? 'on' : ''}" data-a="everyone" data-v="1">Whole group</button></div>` : ''}
+      <div class="entries">${rows || '<p class="muted">No players yet.</p>'}</div>
+      <p class="muted tip">Tap the number for par, then − / + to adjust. Saves automatically.</p>
+      <button class="btn primary" data-a="nextHole" ${idx === holes.length - 1 ? 'disabled' : ''}>Next hole ›</button>
+      <h2 class="sub">Leaderboard</h2>
+      ${boardTable(board, true)}`;
+  }
+
+  const MODES = {
+    upfront: ['Net', 'Everyone starts on minus their handicap; each hole adds your gross score against par.'],
+    index: ['Net by SI', 'Shots are taken on each hole by stroke index — the fairest picture mid-round.'],
+    stableford: ['Stableford', 'Points per hole using your shots: 2 for net par, 3 net birdie, and so on.']
+  };
+
+  function boardTable(board, compact) {
+    if (!board.length) return '<p class="muted">No players yet.</p>';
+    const n = state.round.holes.length;
+    return `
+    <div class="board ${compact ? 'compact' : ''}">
+      <div class="brow head"><span>Pos</span><span>Player</span><span>Thru</span><span>${state.mode === 'stableford' ? 'Pts' : 'Score'}</span></div>
+      ${board.map(r => {
+        const val = state.mode === 'stableford' ? r.points : state.mode === 'index' ? r.netByIndex : r.upfront;
+        const cls = state.mode === 'stableford' ? '' : toParClass(val);
+        const shown = state.mode === 'stableford' ? String(r.points) : S.fmtToPar(val);
+        return `
+        <div class="brow ${r.player.id === state.meId ? 'me' : ''}">
+          <span class="pos">${r.thru ? r.posLabel : '–'}</span>
+          <span class="pl"><b>${esc(r.player.name)}</b><small>HC ${fmtHc(r.player.handicap)}${r.thru ? ` · Gross ${r.gross} (${S.fmtToPar(r.grossToPar)})` : ''}${!compact && r.thru ? ` · ${r.points} pts` : ''}</small></span>
+          <span class="thru">${r.finished ? 'F' : r.thru ? r.thru : '–'}</span>
+          <span class="sc ${cls}">${shown}</span>
+        </div>`;
+      }).join('')}
+    </div>
+    ${n ? '' : ''}`;
+  }
+
+  function renderBoard() {
+    const board = boardOf(mergedMap());
+    return `
+      <div class="seg wide">${Object.keys(MODES).map(k => `<button class="${state.mode === k ? 'on' : ''}" data-a="mode" data-v="${k}">${MODES[k][0]}</button>`).join('')}</div>
+      <p class="muted">${MODES[state.mode][1]}</p>
+      ${boardTable(board, false)}
+      ${shareBox()}`;
+  }
+
+  function renderCard() {
+    const holes = state.round.holes;
+    const m = mergedMap();
+    const ps = state.players;
+    const sum = (pid, list) => {
+      let t = 0, any = false;
+      list.forEach(h => { const v = m[keyOf(pid, h.n)]; if (v != null) { t += v; any = true; } });
+      return any ? t : '';
+    };
+    const front = holes.filter(h => h.n <= 9), back = holes.filter(h => h.n > 9);
+    const holeRow = h => `<tr><th>${h.n}</th><td class="mut">${h.par}</td><td class="mut">${h.si}</td>${ps.map(p => {
+      const v = m[keyOf(p.id, h.n)];
+      return `<td><span class="mark ${scoreClass(v, h.par)}">${v != null ? v : ''}</span></td>`;
+    }).join('')}</tr>`;
+    const totRow = (label, list) => `<tr class="tot"><th>${label}</th><td class="mut">${parTotal(list)}</td><td></td>${ps.map(p => `<td>${sum(p.id, list)}</td>`).join('')}</tr>`;
+    const board = boardOf(m, 'upfront');
+    const netRow = `<tr class="tot net"><th>Net</th><td></td><td></td>${ps.map(p => { const r = board.find(b => b.player.id === p.id); return `<td class="${toParClass(r.upfront)}">${r.thru ? S.fmtToPar(r.upfront) : ''}</td>`; }).join('')}</tr>`;
+    const ptsRow = `<tr class="tot"><th>Pts</th><td></td><td></td>${ps.map(p => { const r = board.find(b => b.player.id === p.id); return `<td>${r.thru ? r.points : ''}</td>`; }).join('')}</tr>`;
+    return `
+      <div class="cardwrap">
+        <table class="sc-table">
+          <thead><tr><th>Hole</th><th>Par</th><th>SI</th>${ps.map(p => `<th class="pn">${esc(p.name.split(' ')[0].slice(0, 8))}</th>`).join('')}</tr></thead>
+          <tbody>
+            ${front.map(holeRow).join('')}
+            ${back.length ? totRow('Out', front) + back.map(holeRow).join('') + totRow('In', back) : ''}
+            ${totRow('Gross', holes)}
+            ${netRow}${ptsRow}
+          </tbody>
+        </table>
+      </div>
+      <div class="legend"><span class="mark eagle">2</span>Eagle+ <span class="mark birdie">3</span>Birdie <span class="mark bogey">5</span>Bogey <span class="mark dbl">6</span>Double+</div>
+      <h2 class="sub">Players</h2>
+      <div class="card">
+        ${ps.map(p => `
+          <div class="prow">
+            <span class="pname">${esc(p.name)}${p.id === state.meId ? ' <small class="muted">(you)</small>' : ''}</span>
+            <input id="hc-${p.id}" class="input hc" inputmode="numeric" value="${fmtHc(p.handicap)}" data-f="editHc" data-p="${p.id}" aria-label="Handicap for ${esc(p.name)}">
+            <button class="icon sm" data-a="rmPlayer" data-p="${p.id}" aria-label="Remove ${esc(p.name)}">✕</button>
+          </div>`).join('')}
+        <div class="row mt">
+          <input id="addName" class="input" placeholder="Add player" autocomplete="off">
+          <input id="addHc" class="input hc" placeholder="HC" inputmode="numeric">
+          <button class="btn" data-a="addPlayer">Add</button>
+        </div>
+      </div>`;
+  }
+
+  function renderSheet() {
+    const st = state.settings;
+    const t = (k, label) => `<label class="toggle"><span>${label}</span><input type="checkbox" data-f="setting" data-k="${k}" ${st[k] ? 'checked' : ''}><i></i></label>`;
+    const perm = 'Notification' in window ? Notification.permission : 'unsupported';
+    return `
+    <div class="scrim" data-a="closeSheet"></div>
+    <div class="sheet" role="dialog" aria-label="Settings">
+      <div class="grab"></div>
+      <h2>Alerts</h2>
+      ${t('alerts', 'Show alerts')}
+      ${t('good', 'Birdies, eagles, aces')}
+      ${t('lead', 'Lead changes')}
+      ${t('blobs', 'Big numbers (triple bogey+)')}
+      ${t('finish', 'Player finishes')}
+      ${t('vibrate', 'Vibrate')}
+      <div class="row between mt">
+        <span>Phone notifications<br><small class="muted">${perm === 'granted' && st.notify ? 'On — when the app is in the background' : perm === 'denied' ? 'Blocked in browser settings' : perm === 'unsupported' ? 'Add to Home Screen first (iPhone)' : 'Off'}</small></span>
+        ${perm === 'granted' ? t('notify', '') : `<button class="btn sm" data-a="enableNotify">Enable</button>`}
+      </div>
+      <h2>Round</h2>
+      <button class="btn ghost" data-a="changeMe">Change who I am</button>
+      <button class="btn ghost" data-a="home">Leave round</button>
+      <button class="btn primary" data-a="closeSheet">Done</button>
+    </div>`;
+  }
+
+  // ---------- actions ----------
+  const actions = {
+    home() {
+      if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
+      state.view = 'home'; state.round = null; state.sheet = false; state.error = ''; state.live = false;
+      history.replaceState(null, '', location.pathname);
+      render();
+    },
+    async newRound() {
+      state.error = '';
+      state.setup = { name: '', courseId: 'new', editing: false, course: { name: '', holes: makeHoles(18) }, saveCourse: true, players: [{ name: '', hc: '' }, { name: '', hc: '' }] };
+      state.view = 'setup'; render();
+      try { await loadCourses(); } catch (e) { /* offline */ }
+      if (state.courses.length && state.view === 'setup') {
+        const c = state.courses[0];
+        Object.assign(state.setup, { courseId: c.id, course: { name: c.name, holes: c.holes.map(h => Object.assign({}, h)) }, saveCourse: false });
+      }
+      render();
+    },
+    join() { openRound(document.getElementById('joinCode').value); },
+    open(el) { openRound(el.dataset.code); },
+    setPar(el) { state.setup.course.holes[+el.dataset.i].par = +el.dataset.v; render(); },
+    holeCount(el) {
+      const n = +el.dataset.v, c = state.setup.course;
+      c.holes = makeHoles(n).map((h, i) => c.holes[i] ? Object.assign({}, c.holes[i]) : h);
+      render();
+    },
+    editHoles() { state.setup.editing = true; render(); },
+    addSetupPlayer() { state.setup.players.push({ name: '', hc: '' }); render(); },
+    rmSetupPlayer(el) { state.setup.players.splice(+el.dataset.i, 1); render(); },
+    async startRound() {
+      const st = state.setup, c = st.course;
+      state.error = '';
+      const cname = String(c.name || '').trim();
+      const holes = c.holes.map(h => ({ n: h.n, par: Number(h.par), si: Number(h.si) }));
+      const sis = holes.map(h => h.si);
+      const players = st.players.map(p => ({ name: String(p.name || '').trim(), handicap: parseHc(p.hc) })).filter(p => p.name || !Number.isNaN(p.handicap));
+      if (!cname) state.error = 'Give the course a name.';
+      else if (sis.some(s => !Number.isInteger(s) || s < 1 || s > 18)) state.error = 'Fill in the stroke index (1–18) for every hole.';
+      else if (new Set(sis).size !== sis.length) state.error = 'Each hole needs a different stroke index.';
+      else if (!players.length) state.error = 'Add at least one player.';
+      else if (players.some(p => !p.name)) state.error = 'Every player needs a name.';
+      else if (players.some(p => Number.isNaN(p.handicap) || p.handicap < -10 || p.handicap > 54)) state.error = 'Handicaps must be whole numbers between +10 and 54.';
+      if (state.error) { render(); return; }
+      state.busy = true; render();
+      try {
+        if (st.saveCourse && (st.courseId === 'new' || st.editing)) {
+          await sb.from('courses').insert({ name: cname, holes });
+        }
+        let round = null;
+        for (let i = 0; i < 5 && !round; i++) {
+          const { data, error } = await sb.from('rounds').insert({ code: genCode(), name: String(st.name || '').trim(), course_name: cname, holes }).select().single();
+          if (!error) round = data;
+          else if (error.code !== '23505') throw error;
+        }
+        if (!round) throw new Error('code');
+        const { error: pe } = await sb.from('players').insert(players.map(p => ({ round_id: round.id, name: p.name, handicap: p.handicap })));
+        if (pe) throw pe;
+        state.busy = false;
+        await openRound(round.code);
+      } catch (e) {
+        state.busy = false;
+        state.error = 'Couldn\'t create the round — check your signal and try again.';
+        render();
+      }
+    },
+    pickMe(el) {
+      state.meId = el.dataset.id;
+      store.set('gs:me:' + state.round.id, state.meId);
+      state.hole = nextHoleFor(state.meId);
+      state.view = 'round'; state.error = ''; render();
+    },
+    async addMe() {
+      const name = document.getElementById('meName').value.trim();
+      const handicap = parseHc(document.getElementById('meHc').value);
+      if (!name || Number.isNaN(handicap) || handicap < -10 || handicap > 54) { state.error = 'Enter your name and a handicap between +10 and 54.'; render(); return; }
+      const { data, error } = await sb.from('players').insert({ round_id: state.round.id, name, handicap }).select().single();
+      if (error) { state.error = 'Couldn\'t add you — try again.'; render(); return; }
+      if (!state.players.some(p => p.id === data.id)) state.players.push(data);
+      actions.pickMe({ dataset: { id: data.id } });
+    },
+    spectate() {
+      store.set('gs:spectate:' + state.round.id, true);
+      state.meId = null; state.view = 'round'; state.tab = 'board'; render();
+    },
+    changeMe() {
+      store.del('gs:me:' + state.round.id); store.del('gs:spectate:' + state.round.id);
+      state.meId = null; state.sheet = false; state.view = 'who'; render();
+    },
+    async share() {
+      const url = shareUrl(state.round.code);
+      const text = `Join our round at ${state.round.course_name} — code ${state.round.code}`;
+      if (navigator.share) { try { await navigator.share({ title: 'Scorecard Live', text, url }); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
+      try { await navigator.clipboard.writeText(url); toast('Link copied', url); } catch (e) { toast('Round code', state.round.code); }
+    },
+    tab(el) { state.tab = el.dataset.v; render(); window.scrollTo(0, 0); },
+    mode(el) { state.mode = el.dataset.v; store.set('gs:mode', state.mode); render(); },
+    everyone(el) { state.everyone = el.dataset.v === '1'; render(); },
+    goHole(el) { state.hole = +el.dataset.v; render(); },
+    prevHole() { const hs = state.round.holes, i = hs.findIndex(h => h.n === state.hole); if (i > 0) { state.hole = hs[i - 1].n; render(); } },
+    nextHole() { const hs = state.round.holes, i = hs.findIndex(h => h.n === state.hole); if (i < hs.length - 1) { state.hole = hs[i + 1].n; render(); window.scrollTo(0, 0); } },
+    tapScore(el) {
+      const h = holeByN(state.hole), m = mergedMap(), v = m[keyOf(el.dataset.p, h.n)];
+      if (v == null) setScore(el.dataset.p, h.n, h.par);
+      else if (confirm('Clear this score?')) setScore(el.dataset.p, h.n, null);
+    },
+    inc(el) { const h = holeByN(state.hole), v = mergedMap()[keyOf(el.dataset.p, h.n)]; setScore(el.dataset.p, h.n, Math.min(20, v == null ? h.par + 1 : v + 1)); },
+    dec(el) { const h = holeByN(state.hole), v = mergedMap()[keyOf(el.dataset.p, h.n)]; setScore(el.dataset.p, h.n, Math.max(1, v == null ? h.par - 1 : v - 1)); },
+    async addPlayer() {
+      const name = document.getElementById('addName').value.trim();
+      const handicap = parseHc(document.getElementById('addHc').value);
+      if (!name || Number.isNaN(handicap) || handicap < -10 || handicap > 54) { toast('Check the details', 'Name and a handicap between +10 and 54.', 'blob'); return; }
+      const { data, error } = await sb.from('players').insert({ round_id: state.round.id, name, handicap }).select().single();
+      if (error) { toast('Not added', 'Try again.', 'blob'); return; }
+      if (!state.players.some(p => p.id === data.id)) state.players.push(data);
+      document.getElementById('addName').value = ''; document.getElementById('addHc').value = '';
+      render();
+    },
+    async rmPlayer(el) {
+      const p = state.players.find(x => x.id === el.dataset.p);
+      if (!p || !confirm(`Remove ${p.name} and their scores?`)) return;
+      const { error } = await sb.from('players').delete().eq('id', p.id);
+      if (error) { toast('Not removed', 'Try again.', 'blob'); return; }
+      state.players = state.players.filter(x => x.id !== p.id);
+      Object.keys(state.confirmed).forEach(k => { if (k.startsWith(p.id + ':')) delete state.confirmed[k]; });
+      if (state.meId === p.id) { state.meId = null; store.del('gs:me:' + state.round.id); }
+      render();
+    },
+    openSheet() { state.sheet = true; render(); },
+    closeSheet() { state.sheet = false; render(); },
+    enableNotify() { enableNotifications(); }
+  };
+
+  $app.addEventListener('click', e => {
+    const el = e.target.closest('[data-a]');
+    if (!el || el.disabled) return;
+    const fn = actions[el.dataset.a];
+    if (fn) { e.preventDefault(); fn(el, e); }
+  });
+
+  // Form fields update state without re-rendering so typing isn't interrupted.
+  $app.addEventListener('input', e => {
+    const el = e.target, f = el.dataset && el.dataset.f;
+    if (!f || !state.setup) return;
+    const st = state.setup, i = +el.dataset.i;
+    if (f === 'name') st.name = el.value;
+    else if (f === 'cname') st.course.name = el.value;
+    else if (f === 'si') st.course.holes[i].si = el.value.replace(/\D/g, '').slice(0, 2);
+    else if (f === 'pname') st.players[i].name = el.value;
+    else if (f === 'phc') st.players[i].hc = el.value;
+  });
+
+  $app.addEventListener('change', async e => {
+    const el = e.target, f = el.dataset && el.dataset.f;
+    if (!f) return;
+    if (f === 'courseId') {
+      const st = state.setup;
+      st.courseId = el.value; st.editing = false;
+      if (el.value === 'new') { st.course = { name: '', holes: makeHoles(18) }; st.saveCourse = true; }
+      else { const c = state.courses.find(x => x.id === el.value); st.course = { name: c.name, holes: c.holes.map(h => Object.assign({}, h)) }; st.saveCourse = false; }
+      render();
+    } else if (f === 'saveCourse') {
+      state.setup.saveCourse = el.checked;
+    } else if (f === 'setting') {
+      state.settings[el.dataset.k] = el.checked;
+      store.set('gs:settings', state.settings);
+      render();
+    } else if (f === 'editHc') {
+      const hc = parseHc(el.value);
+      const p = state.players.find(x => x.id === el.dataset.p);
+      if (!p) return;
+      if (Number.isNaN(hc) || hc < -10 || hc > 54) { el.value = fmtHc(p.handicap); toast('Handicap must be +10 to 54', '', 'blob'); return; }
+      const { error } = await sb.from('players').update({ handicap: hc }).eq('id', p.id);
+      if (error) { toast('Not saved', 'Try again.', 'blob'); el.value = fmtHc(p.handicap); return; }
+      p.handicap = hc; render();
+    }
+  });
+
+  $app.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    if (e.target.id === 'joinCode') actions.join();
+    else if (e.target.id === 'meHc' || e.target.id === 'meName') actions.addMe();
+    else if (e.target.id === 'addHc' || e.target.id === 'addName') actions.addPlayer();
+  });
+
+  // Catch up on anything missed while the phone was locked.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && state.view === 'round') resync(); });
+  window.addEventListener('online', () => { Object.keys(state.local).forEach(k => { const i = k.lastIndexOf(':'); saveScore(k.slice(0, i), Number(k.slice(i + 1))); }); resync(); });
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').then(r => { swReg = r; }).catch(() => {});
+  }
+
+  const code = new URLSearchParams(location.search).get('r');
+  render();
+  if (code) openRound(code);
+})();
