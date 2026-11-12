@@ -65,6 +65,13 @@
     return Array.from({ length: n }, (_, i) => ({ n: i + 1, par: 4, si: '' }));
   }
   const holeByN = n => state.round.holes.find(h => h.n === n);
+  // The course is fixed to Wheatlands for now (par, stroke index and yards from the club card).
+  const COURSE = {
+    name: 'Wheatlands',
+    holes: [[18, 125], [15, 126], [8, 167], [1, 195], [13, 162], [11, 150], [4, 170], [2, 183], [9, 149],
+            [17, 141], [16, 110], [5, 179], [6, 143], [14, 132], [10, 174], [7, 139], [12, 131], [3, 191]]
+      .map(([si, y], i) => ({ n: i + 1, par: 3, si, y }))
+  };
   const MAX_GROUP = 4;
   const grpOf = p => p.grp || 1;
   const groupNums = () => [...new Set(state.players.map(grpOf))].sort((a, b) => a - b);
@@ -170,10 +177,6 @@
     if (state.view === 'round') render();
   }
 
-  async function loadCourses() {
-    const { data } = await sb.from('courses').select('*').order('name');
-    state.courses = data || [];
-  }
 
   async function fetchRound(code) {
     const { data: round, error } = await sb.from('rounds').select('*').eq('code', code).maybeSingle();
@@ -355,22 +358,7 @@
   }
 
   function renderSetup() {
-    const st = state.setup, c = st.course;
-    const editable = st.courseId === 'new' || st.editing;
-    const sel = `<select class="input" data-f="courseId">
-        <option value="new" ${st.courseId === 'new' ? 'selected' : ''}>+ New course</option>
-        ${state.courses.map(x => `<option value="${x.id}" ${st.courseId === x.id ? 'selected' : ''}>${esc(x.name)} (${x.holes.length} holes)</option>`).join('')}
-      </select>`;
-    const grid = `
-      <div class="holes">
-        <div class="hrow head"><span>Hole</span><span>Par</span><span>SI</span></div>
-        ${c.holes.map((h, i) => `
-        <div class="hrow">
-          <span class="hn">${h.n}</span>
-          <div class="seg sm">${[3, 4, 5].map(p => `<button type="button" class="${Number(h.par) === p ? 'on' : ''}" data-a="setPar" data-i="${i}" data-v="${p}">${p}</button>`).join('')}</div>
-          <input class="input si" inputmode="numeric" data-f="si" data-i="${i}" value="${esc(h.si)}" placeholder="–" aria-label="Stroke index hole ${h.n}">
-        </div>`).join('')}
-      </div>`;
+    const st = state.setup;
     return `
     <header class="bar"><button class="icon" data-a="home" aria-label="Back">‹</button><div class="bar-t"><b>New round</b></div></header>
     <main class="pad">
@@ -378,25 +366,12 @@
         <label class="lbl">Round name <span class="muted">(optional)</span></label>
         <input class="input" data-f="name" placeholder="Saturday medal" value="${esc(st.name)}">
       </div>
-      <div class="card">
-        <label class="lbl">Course</label>
-        ${sel}
-        ${editable ? `
-          <input class="input mt" data-f="cname" placeholder="Course name" value="${esc(c.name)}">
-          <div class="row mt between">
-            <span class="lbl0">Holes</span>
-            <div class="seg">${[9, 18].map(n => `<button type="button" class="${c.holes.length === n ? 'on' : ''}" data-a="holeCount" data-v="${n}">${n}</button>`).join('')}</div>
-          </div>
-          ${grid}
-          <p class="muted">Par ${parTotal(c.holes)} · SI is the stroke index on the card (1 = hardest). It decides where handicap shots fall.</p>
-          <label class="check"><input type="checkbox" data-f="saveCourse" ${st.saveCourse ? 'checked' : ''}> Save this course for next time</label>
-        ` : `
-          <p class="muted mt">${c.holes.length} holes · Par ${parTotal(c.holes)}</p>
-          <button class="btn ghost sm" data-a="editHoles">Check / edit holes</button>
-        `}
+      <div class="course-fixed">
+        <div><b>${esc(COURSE.name)}</b><small>18 holes · the nine played twice</small></div>
+        <dl><div><dt>Par</dt><dd>${parTotal(COURSE.holes)}</dd></div><div><dt>Yards</dt><dd>${COURSE.holes.reduce((a, h) => a + h.y, 0).toLocaleString('en-GB')}</dd></div></dl>
       </div>
       <div class="card">
-        <label class="lbl">Players <span class="muted">— name and playing handicap (+2 for a plus handicap)</span></label>
+        <label class="lbl">Your name and handicap</label>
         ${st.players.map((p, i) => `
           <div class="prow">
             <input class="input" data-f="pname" data-i="${i}" placeholder="Name" value="${esc(p.name)}" autocomplete="off">
@@ -404,8 +379,8 @@
             <select class="input grp" data-f="pgrp" data-i="${i}" aria-label="Group">${[1, 2, 3, 4, 5, 6, 7, 8].map(g => `<option value="${g}" ${Number(p.grp) === g ? 'selected' : ''}>G${g}</option>`).join('')}</select>
             ${st.players.length > 1 ? `<button class="icon sm" data-a="rmSetupPlayer" data-i="${i}" aria-label="Remove">✕</button>` : '<span class="icon sm"></span>'}
           </div>`).join('')}
-        <button class="btn ghost sm" data-a="addSetupPlayer">+ Add player</button>
-        <p class="muted">More people can join later with the round code.</p>
+        <p class="muted">Everyone else joins from the link you share next, and picks their own group. Add others here only if you're scoring for them. Use +2 for a plus handicap.</p>
+        <button class="btn ghost sm" data-a="addSetupPlayer">+ Add another player</button>
       </div>
       ${state.error ? `<p class="err">${esc(state.error)}</p>` : ''}
       <button class="btn primary big" data-a="startRound" ${state.busy ? 'disabled' : ''}>${state.busy ? 'Creating…' : 'Tee off'}</button>
@@ -717,48 +692,26 @@
       history.replaceState(null, '', location.pathname);
       render();
     },
-    async newRound() {
+    newRound() {
       state.error = '';
-      state.setup = { name: '', courseId: 'new', editing: false, course: { name: '', holes: makeHoles(18) }, saveCourse: true, players: [{ name: '', hc: '', grp: 1 }, { name: '', hc: '', grp: 1 }] };
+      state.setup = { name: '', players: [{ name: '', hc: '', grp: 1 }] };
       state.view = 'setup'; render();
-      try { await loadCourses(); } catch (e) { /* offline */ }
-      if (state.courses.length && state.view === 'setup') {
-        const c = state.courses[0];
-        Object.assign(state.setup, { courseId: c.id, course: { name: c.name, holes: c.holes.map(h => Object.assign({}, h)) }, saveCourse: false });
-      }
-      render();
     },
-    join() { openRound(document.getElementById('joinCode').value); },
-    open(el) { openRound(el.dataset.code); },
-    setPar(el) { state.setup.course.holes[+el.dataset.i].par = +el.dataset.v; render(); },
-    holeCount(el) {
-      const n = +el.dataset.v, c = state.setup.course;
-      c.holes = makeHoles(n).map((h, i) => c.holes[i] ? Object.assign({}, c.holes[i]) : h);
-      render();
-    },
-    editHoles() { state.setup.editing = true; render(); },
     addSetupPlayer() { const n = state.setup.players.length; state.setup.players.push({ name: '', hc: '', grp: Math.floor(n / MAX_GROUP) + 1 }); render(); },
     rmSetupPlayer(el) { state.setup.players.splice(+el.dataset.i, 1); render(); },
     async startRound() {
-      const st = state.setup, c = st.course;
+      const st = state.setup;
       state.error = '';
-      const cname = String(c.name || '').trim();
-      const holes = c.holes.map(h => Object.assign({ n: h.n, par: Number(h.par), si: Number(h.si) }, h.y ? { y: Number(h.y) } : {}));
-      const sis = holes.map(h => h.si);
+      const cname = COURSE.name;
+      const holes = COURSE.holes.map(h => Object.assign({}, h));
       const players = st.players.map(p => ({ name: String(p.name || '').trim(), handicap: parseHc(p.hc), grp: Number(p.grp) || 1 })).filter(p => p.name || !Number.isNaN(p.handicap));
-      if (!cname) state.error = 'Give the course a name.';
-      else if (sis.some(s => !Number.isInteger(s) || s < 1 || s > 18)) state.error = 'Fill in the stroke index (1–18) for every hole.';
-      else if (new Set(sis).size !== sis.length) state.error = 'Each hole needs a different stroke index.';
-      else if (!players.length) state.error = 'Add at least one player.';
+      if (!players.length) state.error = 'Add at least one player.';
       else if (players.some(p => !p.name)) state.error = 'Every player needs a name.';
       else if (players.some(p => Number.isNaN(p.handicap) || p.handicap < -10 || p.handicap > 54)) state.error = 'Handicaps must be whole numbers between +10 and 54.';
       else if ([...new Set(players.map(p => p.grp))].some(g => players.filter(p => p.grp === g).length > MAX_GROUP)) state.error = 'Groups can have at most 4 players.';
       if (state.error) { render(); return; }
       state.busy = true; render();
       try {
-        if (st.saveCourse && (st.courseId === 'new' || st.editing)) {
-          await sb.from('courses').insert({ name: cname, holes });
-        }
         let round = null;
         for (let i = 0; i < 5 && !round; i++) {
           const { data, error } = await sb.from('rounds').insert({ code: genCode(), name: String(st.name || '').trim(), course_name: cname, holes }).select().single();
@@ -876,8 +829,6 @@
     if (!f || !state.setup) return;
     const st = state.setup, i = +el.dataset.i;
     if (f === 'name') st.name = el.value;
-    else if (f === 'cname') st.course.name = el.value;
-    else if (f === 'si') st.course.holes[i].si = el.value.replace(/\D/g, '').slice(0, 2);
     else if (f === 'pname') st.players[i].name = el.value;
     else if (f === 'phc') st.players[i].hc = el.value;
   });
@@ -885,15 +836,7 @@
   $app.addEventListener('change', async e => {
     const el = e.target, f = el.dataset && el.dataset.f;
     if (!f) return;
-    if (f === 'courseId') {
-      const st = state.setup;
-      st.courseId = el.value; st.editing = false;
-      if (el.value === 'new') { st.course = { name: '', holes: makeHoles(18) }; st.saveCourse = true; }
-      else { const c = state.courses.find(x => x.id === el.value); st.course = { name: c.name, holes: c.holes.map(h => Object.assign({}, h)) }; st.saveCourse = false; }
-      render();
-    } else if (f === 'saveCourse') {
-      state.setup.saveCourse = el.checked;
-    } else if (f === 'setting') {
+    if (f === 'setting') {
       state.settings[el.dataset.k] = el.checked;
       store.set('gs:settings', state.settings);
       render();
