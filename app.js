@@ -7,6 +7,14 @@
     return;
   }
   const sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey);
+  // Show any unexpected error on screen so it can be screenshotted and fixed.
+  function showFatal(msg) {
+    let el = document.getElementById('fatal');
+    if (!el) { el = document.createElement('div'); el.id = 'fatal'; document.body.appendChild(el); }
+    el.textContent = 'Something went wrong: ' + msg + ' — please screenshot this and send it to Sam.';
+  }
+  window.addEventListener('error', e => showFatal((e.message || 'error') + (e.lineno ? ` (line ${e.lineno})` : '')));
+  window.addEventListener('unhandledrejection', e => showFatal(String(e.reason && (e.reason.message || e.reason) || 'unknown')));
   const $app = document.getElementById('app');
   const $toasts = document.getElementById('toasts');
 
@@ -205,10 +213,14 @@
 
   async function openRound(code) {
     code = String(code || '').trim().toUpperCase();
-    if (!code) return;
+    if (!code) { state.error = 'Type the 6-letter round code first.'; render(); return; }
     state.busy = true; state.error = ''; render();
     try {
-      const res = await fetchRound(code);
+      // Never hang silently: give up after 12 seconds with a clear message.
+      const res = await Promise.race([
+        fetchRound(code),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timed out after 12s — the server could not be reached from this phone')), 12000))
+      ]);
       if (!res) { forgetRound(code); state.error = `No round found with code ${code}. It may have been deleted.`; state.view = 'home'; return; }
       state.round = res.round;
       state.players = res.players;
@@ -224,7 +236,7 @@
       state.view = state.meId || store.get('gs:spectate:' + res.round.id, false) ? 'round' : 'who';
       subscribe();
     } catch (e) {
-      state.error = 'Couldn\'t load the round — check your signal and try again.';
+      state.error = `Couldn't open round ${code}. Check your signal and try again. (Details: ${e && (e.message || e.code || e) || 'unknown error'})`;
       state.view = 'home';
     } finally {
       state.busy = false; render();
@@ -357,7 +369,7 @@
         <label class="lbl" for="joinCode">Have a round code?</label>
         <div class="row">
           <input id="joinCode" class="input code" maxlength="8" placeholder="CODE" autocapitalize="characters" autocomplete="off" spellcheck="false">
-          <button class="btn dark" data-a="join" ${state.busy ? 'disabled' : ''}>Join round</button>
+          <button class="btn dark" data-a="join" ${state.busy ? 'disabled' : ''}>${state.busy ? 'Joining…' : 'Join round'}</button>
         </div>
       </div>
       ${state.error ? `<p class="err">${esc(state.error)}</p>` : ''}

@@ -310,3 +310,4 @@ select.input.grp { background-image: none; padding-right: 6px; }
 .recent .item { border-top: 0; flex: 1; min-width: 0; }
 .recent .icon.sm { margin-right: 8px; }
 .btn.danger { background: transparent; border-color: #e3c3c1; color: var(--red); }
+#fatal { position: fixed; left: 12px; right: 12px; bottom: calc(90px + var(--safe-b)); z-index: 60; background: var(--red); color: #fff; padding: 12px 14px; border-radius: 12px; font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.3); }
