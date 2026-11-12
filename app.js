@@ -233,7 +233,7 @@
       state.tab = 'score';
       rememberRound(res.round);
       history.replaceState(null, '', '?r=' + res.round.code);
-      state.view = state.meId || store.get('gs:spectate:' + res.round.id, false) ? 'round' : 'who';
+      state.view = state.meId ? 'round' : 'who';
       subscribe();
     } catch (e) {
       state.error = `Couldn't open round ${code}. Check your signal and try again. (Details: ${e && (e.message || e.code || e) || 'unknown error'})`;
@@ -465,7 +465,7 @@
     <header class="bar">
       <button class="icon" data-a="home" aria-label="Home">‹</button>
       <img class="bar-goose" src="goose.png" alt="">
-      <div class="bar-t"><b>${esc(r.name || r.course_name)}</b><small><span class="dot ${state.live ? 'on' : ''}"></span>${state.live ? 'Live' : 'Connecting…'} · ${esc(r.course_name)}${me ? ' · ' + esc(me.name) : ''}</small></div>
+      <div class="bar-t"><b>${esc(r.name || r.course_name)}</b><small><span class="dot ${state.live ? 'on' : ''}"></span>${state.live ? 'Live' : 'Connecting…'} · ${me ? 'Playing as ' + esc(me.name) : 'Watching'}</small></div>
       <button class="chip code-chip" data-a="share">${esc(r.code)}</button>
       <button class="icon" data-a="openSheet" aria-label="Settings">⚙︎</button>
     </header>
@@ -537,7 +537,12 @@
       ${state.meId ? `<div class="seg wide">
         <button class="${state.scope === 'me' ? 'on' : ''}" data-a="scope" data-v="me">Just me</button>
         <button class="${state.scope === 'group' ? 'on' : ''}" data-a="scope" data-v="group">My group · G${mg}</button></div>` : ''}
-      <div class="entries">${rows || '<p class="muted">No players yet.</p>'}</div>
+      ${!state.meId ? `
+      <div class="joinpanel">
+        <b>You haven't joined this round yet</b>
+        <p>Pick your name or add yourself to start scoring. You're only watching at the moment.</p>
+        <button class="btn primary" data-a="changeMe">Join the round</button>
+      </div>` : `<div class="entries">${rows || '<p class="muted">No players yet.</p>'}</div>`}
       ${state.meId && state.scope === 'group' ? (inGroup(mg).length < MAX_GROUP ? `
       <details class="addpartner"${state.openAdd ? ' open' : ''}>
         <summary data-a="toggleAdd">+ Add a playing partner to Group ${mg}</summary>
@@ -783,7 +788,7 @@
       actions.pickMe({ dataset: { id: data.id } });
     },
     spectate() {
-      store.set('gs:spectate:' + state.round.id, true);
+      // watching lasts for this visit only, so reopening the link offers "Who are you?" again
       state.meId = null; state.view = 'round'; state.tab = 'board'; render();
     },
     changeMe() {
