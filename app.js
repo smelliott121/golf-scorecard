@@ -25,7 +25,7 @@
     tab: 'score',            // score | board | card
     hole: 1,
     mode: store.get('gs:mode', 'upfront'),
-    scope: 'me',             // me | group
+    scope: store.get('gs:scope', 'group'), // me | group
     joinGrp: null,
     cardGrp: null,
     live: false,
@@ -512,6 +512,16 @@
         <button class="${state.scope === 'me' ? 'on' : ''}" data-a="scope" data-v="me">Just me</button>
         <button class="${state.scope === 'group' ? 'on' : ''}" data-a="scope" data-v="group">My group · G${mg}</button></div>` : ''}
       <div class="entries">${rows || '<p class="muted">No players yet.</p>'}</div>
+      ${state.meId && state.scope === 'group' ? (inGroup(mg).length < MAX_GROUP ? `
+      <details class="addpartner"${state.openAdd ? ' open' : ''}>
+        <summary data-a="toggleAdd">+ Add a playing partner to Group ${mg}</summary>
+        <p class="muted">For someone who won't use their own phone — you'll keep their score.</p>
+        <div class="row">
+          <input id="ptName" class="input" placeholder="Name" autocomplete="off">
+          <input id="ptHc" class="input hc" placeholder="HC" inputmode="numeric">
+          <button class="btn primary" data-a="addPartner">Add</button>
+        </div>
+      </details>` : `<p class="muted tip">Group ${mg} is a full four-ball.</p>`) : ''}
       <p class="muted tip">Tap the number for par, then − / + to adjust. Saves automatically.</p>
       <button class="btn primary" data-a="nextHole" ${idx === holes.length - 1 ? 'disabled' : ''}>Next hole ›</button>
       <h2 class="sub">Leaderboard</h2>
@@ -749,7 +759,7 @@
       state.meId = el.dataset.id;
       store.set('gs:me:' + state.round.id, state.meId);
       state.hole = nextHoleFor(state.meId);
-      state.view = 'round'; state.error = ''; render();
+      state.view = 'round'; state.tab = 'score'; state.error = ''; render();
     },
     async addMe() {
       const name = document.getElementById('meName').value.trim();
@@ -778,7 +788,21 @@
     },
     tab(el) { state.tab = el.dataset.v; render(); window.scrollTo(0, 0); },
     mode(el) { state.mode = el.dataset.v; store.set('gs:mode', state.mode); render(); },
-    scope(el) { state.scope = el.dataset.v; render(); },
+    scope(el) { state.scope = el.dataset.v; store.set('gs:scope', state.scope); render(); },
+    toggleAdd(el, e) { e.preventDefault(); state.openAdd = !state.openAdd; render(); if (state.openAdd) { const i = document.getElementById('ptName'); if (i) i.focus(); } },
+    async addPartner() {
+      const name = document.getElementById('ptName').value.trim();
+      const handicap = parseHc(document.getElementById('ptHc').value);
+      const grp = myGroup();
+      if (!name || Number.isNaN(handicap) || handicap < -10 || handicap > 54) { toast('Check the details', 'Name and a handicap between +10 and 54.', 'blob'); return; }
+      if (groupCount(grp) >= MAX_GROUP) { toast(`Group ${grp} is full`, '', 'blob'); return; }
+      const { data, error } = await sb.from('players').insert({ round_id: state.round.id, name, handicap, grp }).select().single();
+      if (error) { toast('Not added', 'Try again.', 'blob'); return; }
+      if (!state.players.some(p => p.id === data.id)) state.players.push(data);
+      state.openAdd = false;
+      toast(`${name} added to Group ${grp}`, 'You can score for them on this screen.');
+      render();
+    },
     joinGrp(el) { state.joinGrp = +el.dataset.v; render(); },
     cardGrp(el) { state.cardGrp = el.dataset.v === 'all' ? 'all' : +el.dataset.v; render(); },
     goHole(el) { state.hole = +el.dataset.v; render(); },
@@ -878,6 +902,7 @@
     if (e.target.id === 'joinCode') actions.join();
     else if (e.target.id === 'meHc' || e.target.id === 'meName') actions.addMe();
     else if (e.target.id === 'addHc' || e.target.id === 'addName') actions.addPlayer();
+    else if (e.target.id === 'ptHc' || e.target.id === 'ptName') actions.addPartner();
   });
 
   // Catch up on anything missed while the phone was locked.
