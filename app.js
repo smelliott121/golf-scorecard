@@ -110,7 +110,7 @@
     if (st.vibrate && navigator.vibrate) navigator.vibrate(allowed.some(a => a.type === 'good') ? [80, 60, 80] : 120);
     if (st.notify && document.visibilityState === 'hidden' && 'Notification' in window && Notification.permission === 'granted') {
       allowed.forEach(a => {
-        const opts = { body: a.body, icon: 'icon.svg', badge: 'icon.svg', tag: a.type + ':' + a.title, data: { url: shareUrl(state.round.code) } };
+        const opts = { body: a.body, icon: 'icon-192.png', badge: 'icon-192.png', tag: a.type + ':' + a.title, data: { url: shareUrl(state.round.code) } };
         if (swReg && swReg.showNotification) swReg.showNotification(a.title, opts);
         else { try { new Notification(a.title, opts); } catch (e) { /* ignore */ } }
       });
@@ -305,9 +305,9 @@
     const recent = store.get('gs:recent', []);
     return `
     <header class="hero">
-      <div class="hero-mark"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="30" y="8" width="3" height="44" rx="1.5" fill="currentColor"/><path d="M33 9 L52 16 L33 23Z" fill="#d9a92b"/><ellipse cx="32" cy="54" rx="20" ry="5" fill="#1f6b4f"/></svg></div>
-      <h1>Scorecard Live</h1>
-      <p>Everyone scores on their own phone. The net leaderboard updates as you go.</p>
+      <img class="wordmark" src="radar.png" alt="Radar">
+      <div class="rule"><span></span><img src="goose.png" alt=""><span></span></div>
+      <p>Live scoring · Net leaderboard</p>
     </header>
     <main class="pad">
       <button class="btn primary big" data-a="newRound" ${state.busy ? 'disabled' : ''}>Start a new round</button>
@@ -428,6 +428,7 @@
     return `
     <header class="bar">
       <button class="icon" data-a="home" aria-label="Home">‹</button>
+      <img class="bar-goose" src="goose.png" alt="">
       <div class="bar-t"><b>${esc(r.name || r.course_name)}</b><small><span class="dot ${state.live ? 'on' : ''}"></span>${state.live ? 'Live' : 'Connecting…'} · ${esc(r.course_name)}${me ? ' · ' + esc(me.name) : ''}</small></div>
       <button class="chip code-chip" data-a="share">${esc(r.code)}</button>
       <button class="icon" data-a="openSheet" aria-label="Settings">⚙︎</button>
@@ -505,7 +506,7 @@
         return `
         <div class="brow ${r.player.id === state.meId ? 'me' : ''}">
           <span class="pos">${r.thru ? r.posLabel : '–'}</span>
-          <span class="pl"><b>${esc(r.player.name)}</b><small>HC ${fmtHc(r.player.handicap)}${r.thru ? ` · Gross ${r.gross} (${S.fmtToPar(r.grossToPar)})` : ''}${!compact && r.thru ? ` · ${r.points} pts` : ''}</small></span>
+          <span class="pl"><b>${esc(r.player.name)}</b><small>HC ${fmtHc(r.player.handicap)}${r.thru ? ` · Gross ${r.gross} (${S.fmtToPar(r.grossToPar)})` : ''}</small></span>
           <span class="thru">${r.finished ? 'F' : r.thru ? r.thru : '–'}</span>
           <span class="sc ${cls}">${shown}</span>
         </div>`;
@@ -514,12 +515,44 @@
     ${n ? '' : ''}`;
   }
 
+  // Running score after each hole, in the style of the old hand-operated tournament boards.
+  function holeBoard(board, list, label) {
+    const mode = state.mode;
+    const cell = (r, h) => {
+      const ph = r.perHole.find(x => x.hole === h.n);
+      if (!ph || ph.strokes == null) return '<td></td>';
+      const v = ph.run[mode];
+      if (mode === 'stableford') return `<td class="pts">${v}</td>`;
+      return `<td class="${v < 0 ? 'under' : 'over'}">${v === 0 ? 'E' : Math.abs(v)}</td>`;
+    };
+    return `
+      <div class="hb">
+        <table>
+          <thead>
+            <tr class="hb-hole"><th>${label}</th>${list.map(h => `<th>${h.n}</th>`).join('')}</tr>
+            <tr class="hb-par"><th>Par</th>${list.map(h => `<th>${h.par}</th>`).join('')}</tr>
+          </thead>
+          <tbody>${board.map(r => `<tr class="${r.player.id === state.meId ? 'me' : ''}"><th>${esc(r.player.name.split(' ')[0].slice(0, 9).toUpperCase())}</th>${list.map(h => cell(r, h)).join('')}</tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+  }
+
   function renderBoard() {
     const board = boardOf(mergedMap());
+    const holes = state.round.holes;
+    const front = holes.filter(h => h.n <= 9), back = holes.filter(h => h.n > 9);
     return `
       <div class="seg wide">${Object.keys(MODES).map(k => `<button class="${state.mode === k ? 'on' : ''}" data-a="mode" data-v="${k}">${MODES[k][0]}</button>`).join('')}</div>
       <p class="muted">${MODES[state.mode][1]}</p>
-      ${boardTable(board, false)}
+      <div class="leaders">
+        <div class="leaders-title"><img src="radar.png" alt=""><span>Leaders</span></div>
+        ${boardTable(board, false)}
+      </div>
+      <div class="hb-wrap">
+        ${holeBoard(board, front, 'Hole')}
+        ${back.length ? holeBoard(board, back, 'Hole') : ''}
+        <p class="hb-key"><span class="under">Red</span> under par · <span class="over">Green</span> over par${state.mode === 'stableford' ? ' · Stableford points' : ''}</p>
+      </div>
       ${shareBox()}`;
   }
 
@@ -533,18 +566,28 @@
       return any ? t : '';
     };
     const front = holes.filter(h => h.n <= 9), back = holes.filter(h => h.n > 9);
-    const holeRow = h => `<tr><th>${h.n}</th><td class="mut">${h.par}</td><td class="mut">${h.si}</td>${ps.map(p => {
-      const v = m[keyOf(p.id, h.n)];
-      return `<td><span class="mark ${scoreClass(v, h.par)}">${v != null ? v : ''}</span></td>`;
-    }).join('')}</tr>`;
+    const ranks = S.siRanks(holes);
+    const holeRow = h => {
+      const rank = ranks[holes.indexOf(h)];
+      return `<tr><th>${h.n}</th><td class="mut">${h.par}</td><td class="mut">${h.si}</td>${ps.map(p => {
+        const v = m[keyOf(p.id, h.n)];
+        const recv = S.strokesReceived(p.handicap, rank, holes.length);
+        const dots = recv > 0 ? `<i class="dots">${'•'.repeat(Math.min(recv, 3))}</i>` : '';
+        return `<td>${dots}<span class="mark ${scoreClass(v, h.par)}">${v != null ? v : ''}</span></td>`;
+      }).join('')}</tr>`;
+    };
     const totRow = (label, list) => `<tr class="tot"><th>${label}</th><td class="mut">${parTotal(list)}</td><td></td>${ps.map(p => `<td>${sum(p.id, list)}</td>`).join('')}</tr>`;
     const board = boardOf(m, 'upfront');
     const netRow = `<tr class="tot net"><th>Net</th><td></td><td></td>${ps.map(p => { const r = board.find(b => b.player.id === p.id); return `<td class="${toParClass(r.upfront)}">${r.thru ? S.fmtToPar(r.upfront) : ''}</td>`; }).join('')}</tr>`;
     const ptsRow = `<tr class="tot"><th>Pts</th><td></td><td></td>${ps.map(p => { const r = board.find(b => b.player.id === p.id); return `<td>${r.thru ? r.points : ''}</td>`; }).join('')}</tr>`;
     return `
-      <div class="cardwrap">
+      <div class="cardwrap players-${Math.min(ps.length, 5)}">
+        <div class="card-head">
+          <img src="radar.png" alt="Radar">
+          <div><b>${esc(state.round.course_name)}</b><small>${esc(state.round.name || '')}${state.round.name ? ' · ' : ''}${new Date(state.round.created_at).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</small></div>
+        </div>
         <table class="sc-table">
-          <thead><tr><th>Hole</th><th>Par</th><th>SI</th>${ps.map(p => `<th class="pn">${esc(p.name.split(' ')[0].slice(0, 8))}</th>`).join('')}</tr></thead>
+          <thead><tr><th>Hole</th><th>Par</th><th>SI</th>${ps.map(p => `<th class="pn">${esc(p.name.split(' ')[0].slice(0, 9))}<small>${fmtHc(p.handicap)}</small></th>`).join('')}</tr></thead>
           <tbody>
             ${front.map(holeRow).join('')}
             ${back.length ? totRow('Out', front) + back.map(holeRow).join('') + totRow('In', back) : ''}
@@ -553,7 +596,7 @@
           </tbody>
         </table>
       </div>
-      <div class="legend"><span class="mark eagle">2</span>Eagle+ <span class="mark birdie">3</span>Birdie <span class="mark bogey">5</span>Bogey <span class="mark dbl">6</span>Double+</div>
+      <div class="legend"><span class="mark eagle">2</span>Eagle+ <span class="mark birdie">3</span>Birdie <span class="mark bogey">5</span>Bogey <span class="mark dbl">6</span>Double+ <span><i class="dots">••</i> shots received</span></div>
       <h2 class="sub">Players</h2>
       <div class="card">
         ${ps.map(p => `
@@ -688,7 +731,7 @@
     async share() {
       const url = shareUrl(state.round.code);
       const text = `Join our round at ${state.round.course_name} — code ${state.round.code}`;
-      if (navigator.share) { try { await navigator.share({ title: 'Scorecard Live', text, url }); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
+      if (navigator.share) { try { await navigator.share({ title: 'Radar', text, url }); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
       try { await navigator.clipboard.writeText(url); toast('Link copied', url); } catch (e) { toast('Round code', state.round.code); }
     },
     tab(el) { state.tab = el.dataset.v; render(); window.scrollTo(0, 0); },

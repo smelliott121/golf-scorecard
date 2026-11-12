@@ -1,4 +1,6 @@
-# Scorecard Live ⛳
+<img src="radar.png" width="260" alt="Radar">
+
+# Radar
 
 A live golf scorecard and net leaderboard for a group. Everyone enters their own score on their phone after each hole, and every phone's leaderboard updates instantly.
 
@@ -9,6 +11,10 @@ A live golf scorecard and net leaderboard for a group. Everyone enters their own
 1. **Start a round:** pick or enter the course (par and stroke index for each hole) and add players with their playing handicaps.
 2. **Share the code:** each round gets a 6-letter code and link. Friends open it, tap their name (or add themselves), and score.
 3. **Score each hole:** tap the number for par, then − / +. Scores save automatically and appear on everyone's phone.
+
+## Leaderboard
+
+A "Leaders" board plus a hole-by-hole board in the style of classic tournament scoreboards: red numbers under par, green over. The Card tab is a full scorecard with a column per player (fits 3 or 4 on a phone) and gold dots where each player gets shots.
 
 ## Leaderboard modes
 

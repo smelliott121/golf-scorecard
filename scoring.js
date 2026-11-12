@@ -34,7 +34,9 @@
       netByIndex += net - h.par;
       const pts = Math.max(0, 2 + h.par - net);
       points += pts;
-      return { hole: h.n, par: h.par, recv, strokes: s, net, pts };
+      // running totals after this hole, one per leaderboard mode
+      const run = { upfront: grossToPar - player.handicap, index: netByIndex, stableford: points };
+      return { hole: h.n, par: h.par, recv, strokes: s, net, pts, run };
     });
     return {
       player, thru, gross, grossToPar, points, perHole,
