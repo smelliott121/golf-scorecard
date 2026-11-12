@@ -12,6 +12,10 @@ A live golf scorecard and net leaderboard for a group. Everyone enters their own
 2. **Share the code:** each round gets a 6-letter code and link. Friends open it, tap their name (or add themselves), and score.
 3. **Score each hole:** tap the number for par, then − / +. Scores save automatically and appear on everyone's phone.
 
+## Playing groups
+
+Each player joins a playing group of 2 to 4 (a full four-ball is locked). The Score and Card tabs show your own group; the leaderboard ranks everyone individually across all groups. Groups can be changed from the Card tab.
+
 ## Leaderboard
 
 A "Leaders" board plus a hole-by-hole board in the style of classic tournament scoreboards: red numbers under par, green over. The Card tab is a full scorecard with a column per player (fits 3 or 4 on a phone) and gold dots where each player gets shots.

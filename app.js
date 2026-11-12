@@ -25,7 +25,9 @@
     tab: 'score',            // score | board | card
     hole: 1,
     mode: store.get('gs:mode', 'upfront'),
-    everyone: false,
+    scope: 'me',             // me | group
+    joinGrp: null,
+    cardGrp: null,
     live: false,
     channel: null,
     courses: [],
@@ -63,6 +65,28 @@
     return Array.from({ length: n }, (_, i) => ({ n: i + 1, par: 4, si: '' }));
   }
   const holeByN = n => state.round.holes.find(h => h.n === n);
+  const MAX_GROUP = 4;
+  const grpOf = p => p.grp || 1;
+  const groupNums = () => [...new Set(state.players.map(grpOf))].sort((a, b) => a - b);
+  const groupCount = g => state.players.filter(p => grpOf(p) === g).length;
+  const meP = () => state.players.find(p => p.id === state.meId);
+  const myGroup = () => { const me = meP(); return me ? grpOf(me) : null; };
+  const inGroup = g => state.players.filter(p => grpOf(p) === g);
+  function defaultJoinGroup() {
+    const open = groupNums().find(g => groupCount(g) < MAX_GROUP);
+    return open || (groupNums().length ? Math.max(...groupNums()) + 1 : 1);
+  }
+  // Chips for picking a playing group: existing groups (full ones locked) plus a new one.
+  function groupChips(action, selected, extra) {
+    const nums = groupNums();
+    const next = nums.length ? Math.max(...nums) + 1 : 1;
+    const opts = nums.concat(nums.includes(next) ? [] : [next]);
+    return `<div class="gchips">${opts.map(g => {
+      const n = groupCount(g), full = n >= MAX_GROUP && g !== selected;
+      const label = nums.includes(g) ? `Group ${g}<small>${n} player${n === 1 ? '' : 's'}${n >= MAX_GROUP ? ' · full' : ''}</small>` : `+ New group<small>Group ${g}</small>`;
+      return `<button type="button" class="gchip ${g === selected ? 'on' : ''}" data-a="${action}" data-v="${g}" ${full ? 'disabled' : ''}${extra || ''}>${label}</button>`;
+    }).join('')}</div>`;
+  }
   const parTotal = holes => holes.reduce((a, h) => a + Number(h.par || 0), 0);
   const shareUrl = code => location.origin + location.pathname + '?r=' + code;
 
@@ -375,6 +399,7 @@
           <div class="prow">
             <input class="input" data-f="pname" data-i="${i}" placeholder="Name" value="${esc(p.name)}" autocomplete="off">
             <input class="input hc" data-f="phc" data-i="${i}" placeholder="HC" inputmode="numeric" value="${esc(p.hc)}">
+            <select class="input grp" data-f="pgrp" data-i="${i}" aria-label="Group">${[1, 2, 3, 4, 5, 6, 7, 8].map(g => `<option value="${g}" ${Number(p.grp) === g ? 'selected' : ''}>G${g}</option>`).join('')}</select>
             ${st.players.length > 1 ? `<button class="icon sm" data-a="rmSetupPlayer" data-i="${i}" aria-label="Remove">✕</button>` : '<span class="icon sm"></span>'}
           </div>`).join('')}
         <button class="btn ghost sm" data-a="addSetupPlayer">+ Add player</button>
@@ -402,16 +427,20 @@
     <main class="pad">
       ${shareBox()}
       <h2 class="sub">Who are you?</h2>
-      <div class="list">${state.players.map(p => `
-        <button class="item" data-a="pickMe" data-id="${p.id}"><b>${esc(p.name)}</b><span class="chip">HC ${fmtHc(p.handicap)}</span></button>`).join('')}
-      </div>
+      ${groupNums().map(g => `
+        <div class="ghead">Group ${g}<span>${groupCount(g)}-ball</span></div>
+        <div class="list">${inGroup(g).map(p => `
+          <button class="item" data-a="pickMe" data-id="${p.id}"><b>${esc(p.name)}</b><span class="chip">HC ${fmtHc(p.handicap)}</span></button>`).join('')}
+        </div>`).join('')}
       <div class="card">
         <label class="lbl">Not on the list? Add yourself</label>
         <div class="row">
           <input id="meName" class="input" placeholder="Name" autocomplete="off">
           <input id="meHc" class="input hc" placeholder="HC" inputmode="numeric">
-          <button class="btn primary" data-a="addMe">Add</button>
         </div>
+        <label class="lbl mt">Your playing group</label>
+        ${groupChips('joinGrp', state.joinGrp || defaultJoinGroup())}
+        <button class="btn primary" data-a="addMe">Add me</button>
       </div>
       ${state.error ? `<p class="err">${esc(state.error)}</p>` : ''}
       <button class="btn ghost" data-a="spectate">Just watching</button>
@@ -448,9 +477,11 @@
     const ranks = S.siRanks(holes);
     const m = mergedMap();
     const board = boardOf(m);
-    const list = (state.everyone || !state.meId) ? state.players : state.players.filter(p => p.id === state.meId);
+    const mg = myGroup();
+    const list = !state.meId ? state.players : state.scope === 'group' ? inGroup(mg) : state.players.filter(p => p.id === state.meId);
+    const stripPlayers = mg ? inGroup(mg) : state.players;
     const strip = holes.map(x => {
-      const done = state.players.length && state.players.every(p => m[keyOf(p.id, x.n)] != null);
+      const done = stripPlayers.length && stripPlayers.every(p => m[keyOf(p.id, x.n)] != null);
       const mine = state.meId && m[keyOf(state.meId, x.n)] != null;
       return `<button class="hchip ${x.n === h.n ? 'on' : ''} ${done ? 'done' : mine ? 'mine' : ''}" data-a="goHole" data-v="${x.n}">${x.n}</button>`;
     }).join('');
@@ -478,8 +509,8 @@
         <button class="icon" data-a="nextHole" ${idx === holes.length - 1 ? 'disabled' : ''} aria-label="Next hole">›</button>
       </div>
       ${state.meId ? `<div class="seg wide">
-        <button class="${!state.everyone ? 'on' : ''}" data-a="everyone" data-v="0">Just me</button>
-        <button class="${state.everyone ? 'on' : ''}" data-a="everyone" data-v="1">Whole group</button></div>` : ''}
+        <button class="${state.scope === 'me' ? 'on' : ''}" data-a="scope" data-v="me">Just me</button>
+        <button class="${state.scope === 'group' ? 'on' : ''}" data-a="scope" data-v="group">My group · G${mg}</button></div>` : ''}
       <div class="entries">${rows || '<p class="muted">No players yet.</p>'}</div>
       <p class="muted tip">Tap the number for par, then − / + to adjust. Saves automatically.</p>
       <button class="btn primary" data-a="nextHole" ${idx === holes.length - 1 ? 'disabled' : ''}>Next hole ›</button>
@@ -506,7 +537,7 @@
         return `
         <div class="brow ${r.player.id === state.meId ? 'me' : ''}">
           <span class="pos">${r.thru ? r.posLabel : '–'}</span>
-          <span class="pl"><b>${esc(r.player.name)}</b><small>HC ${fmtHc(r.player.handicap)}${r.thru ? ` · Gross ${r.gross} (${S.fmtToPar(r.grossToPar)})` : ''}</small></span>
+          <span class="pl"><b>${esc(r.player.name)}</b><small>HC ${fmtHc(r.player.handicap)}${groupNums().length > 1 ? ` · G${grpOf(r.player)}` : ''}${r.thru ? ` · Gross ${r.gross} (${S.fmtToPar(r.grossToPar)})` : ''}</small></span>
           <span class="thru">${r.finished ? 'F' : r.thru ? r.thru : '–'}</span>
           <span class="sc ${cls}">${shown}</span>
         </div>`;
@@ -559,7 +590,11 @@
   function renderCard() {
     const holes = state.round.holes;
     const m = mergedMap();
-    const ps = state.players;
+    const nums = groupNums();
+    let cg = state.cardGrp;
+    if (cg !== 'all' && !nums.includes(cg)) cg = myGroup() || nums[0] || 1;
+    const ps = cg === 'all' ? state.players : inGroup(cg);
+    const picker = nums.length > 1 ? `<div class="seg wide">${nums.map(g => `<button class="${cg === g ? 'on' : ''}" data-a="cardGrp" data-v="${g}">Group ${g}</button>`).join('')}<button class="${cg === 'all' ? 'on' : ''}" data-a="cardGrp" data-v="all">All</button></div>` : '';
     const sum = (pid, list) => {
       let t = 0, any = false;
       list.forEach(h => { const v = m[keyOf(pid, h.n)]; if (v != null) { t += v; any = true; } });
@@ -581,10 +616,11 @@
     const netRow = `<tr class="tot net"><th>Net</th><td></td><td></td>${ps.map(p => { const r = board.find(b => b.player.id === p.id); return `<td class="${toParClass(r.upfront)}">${r.thru ? S.fmtToPar(r.upfront) : ''}</td>`; }).join('')}</tr>`;
     const ptsRow = `<tr class="tot"><th>Pts</th><td></td><td></td>${ps.map(p => { const r = board.find(b => b.player.id === p.id); return `<td>${r.thru ? r.points : ''}</td>`; }).join('')}</tr>`;
     return `
+      ${picker}
       <div class="cardwrap players-${Math.min(ps.length, 5)}">
         <div class="card-head">
           <img src="radar.png" alt="Radar">
-          <div><b>${esc(state.round.course_name)}</b><small>${esc(state.round.name || '')}${state.round.name ? ' · ' : ''}${new Date(state.round.created_at).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</small></div>
+          <div><b>${esc(state.round.course_name)}</b><small>${cg === 'all' ? 'All players' : `Group ${cg}`} · ${esc(state.round.name || '')}${state.round.name ? ' · ' : ''}${new Date(state.round.created_at).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</small></div>
         </div>
         <table class="sc-table">
           <thead><tr><th>Hole</th><th>Par</th><th>SI</th>${ps.map(p => `<th class="pn">${esc(p.name.split(' ')[0].slice(0, 9))}<small>${fmtHc(p.handicap)}</small></th>`).join('')}</tr></thead>
@@ -597,18 +633,21 @@
         </table>
       </div>
       <div class="legend"><span class="mark eagle">2</span>Eagle+ <span class="mark birdie">3</span>Birdie <span class="mark bogey">5</span>Bogey <span class="mark dbl">6</span>Double+ <span><i class="dots">••</i> shots received</span></div>
-      <h2 class="sub">Players</h2>
+      <h2 class="sub">Players &amp; groups</h2>
       <div class="card">
-        ${ps.map(p => `
+        ${state.players.map(p => `
           <div class="prow">
             <span class="pname">${esc(p.name)}${p.id === state.meId ? ' <small class="muted">(you)</small>' : ''}</span>
             <input id="hc-${p.id}" class="input hc" inputmode="numeric" value="${fmtHc(p.handicap)}" data-f="editHc" data-p="${p.id}" aria-label="Handicap for ${esc(p.name)}">
+            <select class="input grp" data-f="editGrp" data-p="${p.id}" aria-label="Group for ${esc(p.name)}">${Array.from({ length: Math.max(...nums, 0) + 1 }, (_, i) => i + 1).map(g => `<option value="${g}" ${grpOf(p) === g ? 'selected' : ''} ${g !== grpOf(p) && groupCount(g) >= MAX_GROUP ? 'disabled' : ''}>G${g}</option>`).join('')}</select>
             <button class="icon sm" data-a="rmPlayer" data-p="${p.id}" aria-label="Remove ${esc(p.name)}">✕</button>
           </div>`).join('')}
         <div class="row mt">
           <input id="addName" class="input" placeholder="Add player" autocomplete="off">
           <input id="addHc" class="input hc" placeholder="HC" inputmode="numeric">
           <button class="btn" data-a="addPlayer">Add</button>
+        </div>
+        <p class="muted">${cg === 'all' ? 'New players go into the first group with space.' : `New players go into Group ${cg}.`}</p><div>
         </div>
       </div>`;
   }
@@ -649,7 +688,7 @@
     },
     async newRound() {
       state.error = '';
-      state.setup = { name: '', courseId: 'new', editing: false, course: { name: '', holes: makeHoles(18) }, saveCourse: true, players: [{ name: '', hc: '' }, { name: '', hc: '' }] };
+      state.setup = { name: '', courseId: 'new', editing: false, course: { name: '', holes: makeHoles(18) }, saveCourse: true, players: [{ name: '', hc: '', grp: 1 }, { name: '', hc: '', grp: 1 }] };
       state.view = 'setup'; render();
       try { await loadCourses(); } catch (e) { /* offline */ }
       if (state.courses.length && state.view === 'setup') {
@@ -667,7 +706,7 @@
       render();
     },
     editHoles() { state.setup.editing = true; render(); },
-    addSetupPlayer() { state.setup.players.push({ name: '', hc: '' }); render(); },
+    addSetupPlayer() { const n = state.setup.players.length; state.setup.players.push({ name: '', hc: '', grp: Math.floor(n / MAX_GROUP) + 1 }); render(); },
     rmSetupPlayer(el) { state.setup.players.splice(+el.dataset.i, 1); render(); },
     async startRound() {
       const st = state.setup, c = st.course;
@@ -675,13 +714,14 @@
       const cname = String(c.name || '').trim();
       const holes = c.holes.map(h => Object.assign({ n: h.n, par: Number(h.par), si: Number(h.si) }, h.y ? { y: Number(h.y) } : {}));
       const sis = holes.map(h => h.si);
-      const players = st.players.map(p => ({ name: String(p.name || '').trim(), handicap: parseHc(p.hc) })).filter(p => p.name || !Number.isNaN(p.handicap));
+      const players = st.players.map(p => ({ name: String(p.name || '').trim(), handicap: parseHc(p.hc), grp: Number(p.grp) || 1 })).filter(p => p.name || !Number.isNaN(p.handicap));
       if (!cname) state.error = 'Give the course a name.';
       else if (sis.some(s => !Number.isInteger(s) || s < 1 || s > 18)) state.error = 'Fill in the stroke index (1–18) for every hole.';
       else if (new Set(sis).size !== sis.length) state.error = 'Each hole needs a different stroke index.';
       else if (!players.length) state.error = 'Add at least one player.';
       else if (players.some(p => !p.name)) state.error = 'Every player needs a name.';
       else if (players.some(p => Number.isNaN(p.handicap) || p.handicap < -10 || p.handicap > 54)) state.error = 'Handicaps must be whole numbers between +10 and 54.';
+      else if ([...new Set(players.map(p => p.grp))].some(g => players.filter(p => p.grp === g).length > MAX_GROUP)) state.error = 'Groups can have at most 4 players.';
       if (state.error) { render(); return; }
       state.busy = true; render();
       try {
@@ -695,7 +735,7 @@
           else if (error.code !== '23505') throw error;
         }
         if (!round) throw new Error('code');
-        const { error: pe } = await sb.from('players').insert(players.map(p => ({ round_id: round.id, name: p.name, handicap: p.handicap })));
+        const { error: pe } = await sb.from('players').insert(players.map(p => ({ round_id: round.id, name: p.name, handicap: p.handicap, grp: p.grp })));
         if (pe) throw pe;
         state.busy = false;
         await openRound(round.code);
@@ -715,7 +755,9 @@
       const name = document.getElementById('meName').value.trim();
       const handicap = parseHc(document.getElementById('meHc').value);
       if (!name || Number.isNaN(handicap) || handicap < -10 || handicap > 54) { state.error = 'Enter your name and a handicap between +10 and 54.'; render(); return; }
-      const { data, error } = await sb.from('players').insert({ round_id: state.round.id, name, handicap }).select().single();
+      const grp = state.joinGrp || defaultJoinGroup();
+      if (groupCount(grp) >= MAX_GROUP) { state.error = `Group ${grp} is full — pick another.`; render(); return; }
+      const { data, error } = await sb.from('players').insert({ round_id: state.round.id, name, handicap, grp }).select().single();
       if (error) { state.error = 'Couldn\'t add you — try again.'; render(); return; }
       if (!state.players.some(p => p.id === data.id)) state.players.push(data);
       actions.pickMe({ dataset: { id: data.id } });
@@ -736,7 +778,9 @@
     },
     tab(el) { state.tab = el.dataset.v; render(); window.scrollTo(0, 0); },
     mode(el) { state.mode = el.dataset.v; store.set('gs:mode', state.mode); render(); },
-    everyone(el) { state.everyone = el.dataset.v === '1'; render(); },
+    scope(el) { state.scope = el.dataset.v; render(); },
+    joinGrp(el) { state.joinGrp = +el.dataset.v; render(); },
+    cardGrp(el) { state.cardGrp = el.dataset.v === 'all' ? 'all' : +el.dataset.v; render(); },
     goHole(el) { state.hole = +el.dataset.v; render(); },
     prevHole() { const hs = state.round.holes, i = hs.findIndex(h => h.n === state.hole); if (i > 0) { state.hole = hs[i - 1].n; render(); } },
     nextHole() { const hs = state.round.holes, i = hs.findIndex(h => h.n === state.hole); if (i < hs.length - 1) { state.hole = hs[i + 1].n; render(); window.scrollTo(0, 0); } },
@@ -751,7 +795,9 @@
       const name = document.getElementById('addName').value.trim();
       const handicap = parseHc(document.getElementById('addHc').value);
       if (!name || Number.isNaN(handicap) || handicap < -10 || handicap > 54) { toast('Check the details', 'Name and a handicap between +10 and 54.', 'blob'); return; }
-      const { data, error } = await sb.from('players').insert({ round_id: state.round.id, name, handicap }).select().single();
+      let grp = typeof state.cardGrp === 'number' && groupNums().includes(state.cardGrp) ? state.cardGrp : (myGroup() || defaultJoinGroup());
+      if (groupCount(grp) >= MAX_GROUP) grp = defaultJoinGroup();
+      const { data, error } = await sb.from('players').insert({ round_id: state.round.id, name, handicap, grp }).select().single();
       if (error) { toast('Not added', 'Try again.', 'blob'); return; }
       if (!state.players.some(p => p.id === data.id)) state.players.push(data);
       document.getElementById('addName').value = ''; document.getElementById('addHc').value = '';
@@ -806,6 +852,16 @@
       state.settings[el.dataset.k] = el.checked;
       store.set('gs:settings', state.settings);
       render();
+    } else if (f === 'pgrp') {
+      state.setup.players[+el.dataset.i].grp = +el.value;
+    } else if (f === 'editGrp') {
+      const p = state.players.find(x => x.id === el.dataset.p);
+      const g = +el.value;
+      if (!p) return;
+      if (groupCount(g) >= MAX_GROUP) { toast(`Group ${g} is full`, '', 'blob'); render(); return; }
+      const { error } = await sb.from('players').update({ grp: g }).eq('id', p.id);
+      if (error) { toast('Not saved', 'Try again.', 'blob'); render(); return; }
+      p.grp = g; render();
     } else if (f === 'editHc') {
       const hc = parseHc(el.value);
       const p = state.players.find(x => x.id === el.dataset.p);

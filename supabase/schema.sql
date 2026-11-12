@@ -19,6 +19,7 @@ create table public.players (
   round_id uuid not null references public.rounds(id) on delete cascade,
   name text not null check (char_length(name) between 1 and 40),
   handicap integer not null check (handicap between -10 and 54),  -- negative = plus handicap
+  grp integer not null default 1 check (grp between 1 and 30),     -- playing group (2-4 balls)
   created_at timestamptz not null default now()
 );
 create index players_round_idx on public.players(round_id);
