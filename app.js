@@ -2,6 +2,10 @@
   'use strict';
   const S = window.Scoring;
   const CFG = window.SCORECARD_CONFIG;
+  if (!window.supabase || !window.Scoring) {
+    document.getElementById('app').innerHTML = '<p class="err" style="margin:24px 16px">Radar didn\'t load properly. Check your signal, then close this tab and open the link again.</p>';
+    return;
+  }
   const sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey);
   const $app = document.getElementById('app');
   const $toasts = document.getElementById('toasts');
@@ -776,9 +780,10 @@
     },
     async share() {
       const url = shareUrl(state.round.code);
-      const text = `Join our round at ${state.round.course_name} — code ${state.round.code}`;
-      if (navigator.share) { try { await navigator.share({ title: 'Radar', text, url }); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
-      try { await navigator.clipboard.writeText(url); toast('Link copied', url); } catch (e) { toast('Round code', state.round.code); }
+      // Put the link inside the message itself: WhatsApp on Android drops a separate url field.
+      const text = `Join our round at ${state.round.course_name} on Radar: ${url}\nOr open the app and enter code ${state.round.code}`;
+      if (navigator.share) { try { await navigator.share({ title: 'Radar', text }); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
+      try { await navigator.clipboard.writeText(text); toast('Invite copied', 'Paste it into your group chat.'); } catch (e) { toast('Send this link', url); }
     },
     tab(el) { state.tab = el.dataset.v; render(); window.scrollTo(0, 0); },
     mode(el) { state.mode = el.dataset.v; store.set('gs:mode', state.mode); render(); },
