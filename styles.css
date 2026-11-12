@@ -303,3 +303,5 @@ select.input.grp { background-image: none; padding-right: 6px; }
 .course-fixed dl div:first-child { border-left: 0; margin-left: 0; padding-left: 0; }
 .course-fixed dt { font-size: 12px; color: rgba(251, 250, 245, .55); }
 .course-fixed dd { margin: 2px 0 0; font: 700 22px/1 var(--serif); font-variation-settings: "opsz" 6; }
+.item-r { display: flex; align-items: center; gap: 10px; }
+.chev { font-size: 26px; line-height: 1; color: var(--brass); }

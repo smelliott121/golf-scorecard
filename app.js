@@ -400,17 +400,18 @@
     const r = state.round;
     return `
     <header class="bar"><button class="icon" data-a="home" aria-label="Home">‹</button>
-      <div class="bar-t"><b>${esc(r.name || r.course_name)}</b><small>${esc(r.course_name)}</small></div></header>
+      <div class="bar-t"><b>${esc(r.name || r.course_name)}</b><small>${r.name ? esc(r.course_name) : 'Join the round'}</small></div></header>
     <main class="pad">
-      ${shareBox()}
       <h2 class="sub">Who are you?</h2>
+      <p class="muted">Tap your name to start scoring.</p>
       ${groupNums().map(g => `
         <div class="ghead">Group ${g}<span>${groupCount(g)}-ball</span></div>
         <div class="list">${inGroup(g).map(p => `
-          <button class="item" data-a="pickMe" data-id="${p.id}"><b>${esc(p.name)}</b><span class="chip">HC ${fmtHc(p.handicap)}</span></button>`).join('')}
+          <button class="item" data-a="pickMe" data-id="${p.id}"><b>${esc(p.name)}</b><span class="item-r"><span class="chip">HC ${fmtHc(p.handicap)}</span><span class="chev" aria-hidden="true">›</span></span></button>`).join('')}
         </div>`).join('')}
       <div class="card">
         <label class="lbl">Not on the list? Add yourself</label>
+        <p class="muted" style="margin:-4px 0 10px">Only if your name isn't above.</p>
         <div class="row">
           <input id="meName" class="input" placeholder="Name" autocomplete="off">
           <input id="meHc" class="input hc" placeholder="HC" inputmode="numeric">
@@ -421,6 +422,7 @@
       </div>
       ${state.error ? `<p class="err">${esc(state.error)}</p>` : ''}
       <button class="btn ghost" data-a="spectate">Just watching</button>
+      ${shareBox()}
     </main>`;
   }
 
@@ -719,8 +721,11 @@
           else if (error.code !== '23505') throw error;
         }
         if (!round) throw new Error('code');
-        const { error: pe } = await sb.from('players').insert(players.map(p => ({ round_id: round.id, name: p.name, handicap: p.handicap, grp: p.grp })));
+        const { data: made, error: pe } = await sb.from('players').insert(players.map(p => ({ round_id: round.id, name: p.name, handicap: p.handicap, grp: p.grp }))).select();
         if (pe) throw pe;
+        // Whoever starts the round is the first player: skip "Who are you?" and go straight to scoring.
+        const first = (made || []).find(x => x.name === players[0].name) || (made || [])[0];
+        if (first) store.set('gs:me:' + round.id, first.id);
         state.busy = false;
         await openRound(round.code);
       } catch (e) {
