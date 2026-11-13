@@ -39,6 +39,7 @@
     mode: store.get('gs:mode', 'upfront'),
     scope: store.get('gs:scope', 'group'), // me | group
     joinGrp: null,
+    join: { name: '', hc: '' },
     cardGrp: null,
     live: false,
     channel: null,
@@ -107,11 +108,12 @@
   // Chips for picking a playing group: existing groups (full ones locked) plus a new one.
   function groupChips(action, selected, extra) {
     const nums = groupNums();
-    const next = nums.length ? Math.max(...nums) + 1 : 1;
-    const opts = nums.concat(nums.includes(next) ? [] : [next]);
+    const top = Math.max(nums.length ? Math.max(...nums) + 1 : 1, 2);
+    const opts = Array.from({ length: top }, (_, i) => i + 1);
     return `<div class="gchips">${opts.map(g => {
       const n = groupCount(g), full = n >= MAX_GROUP && g !== selected;
-      const label = nums.includes(g) ? `Group ${g}<small>${n} player${n === 1 ? '' : 's'}${n >= MAX_GROUP ? ' · full' : ''}</small>` : `+ New group<small>Group ${g}</small>`;
+      const who = inGroup(g).map(p => esc(p.name.split(' ')[0])).join(', ');
+      const label = `Group ${g}<small>${n ? who : 'Empty'}${n >= MAX_GROUP ? ' · full' : ''}</small>`;
       return `<button type="button" class="gchip ${g === selected ? 'on' : ''}" data-a="${action}" data-v="${g}" ${full ? 'disabled' : ''}${extra || ''}>${label}</button>`;
     }).join('')}</div>`;
   }
@@ -441,11 +443,12 @@
         <label class="lbl">Not on the list? Add yourself</label>
         <p class="muted" style="margin:-4px 0 10px">Only if your name isn't above.</p>
         <div class="row">
-          <input id="meName" class="input" placeholder="Name" autocomplete="off">
-          <input id="meHc" class="input hc" placeholder="HC" inputmode="numeric">
+          <input id="meName" class="input" placeholder="Name" autocomplete="off" data-f="meName" value="${esc(state.join.name)}">
+          <input id="meHc" class="input hc" placeholder="HC" inputmode="numeric" data-f="meHc" value="${esc(state.join.hc)}">
         </div>
         <label class="lbl mt">Your playing group</label>
-        ${groupChips('joinGrp', state.joinGrp || defaultJoinGroup())}
+        ${groupChips('joinGrp', state.joinGrp)}
+        <p class="muted" style="margin:2px 0 0">Tap the group you're playing in.</p>
         <button class="btn primary" data-a="addMe">Add me</button>
       </div>
       ${state.error ? `<p class="err">${esc(state.error)}</p>` : ''}
@@ -701,6 +704,9 @@
     <div class="scrim" data-a="closeSheet"></div>
     <div class="sheet" role="dialog" aria-label="Settings">
       <div class="grab"></div>
+      ${state.meId ? `<h2>Your group</h2>
+      <p class="muted" style="margin:0 0 10px">Playing with someone else? Move yourself here.</p>
+      ${groupChips('moveMe', myGroup())}` : ''}
       <h2>Alerts</h2>
       ${t('alerts', 'Show alerts')}
       ${t('good', 'Birdies, eagles, aces')}
@@ -777,14 +783,16 @@
       state.view = 'round'; state.tab = 'score'; state.error = ''; render();
     },
     async addMe() {
-      const name = document.getElementById('meName').value.trim();
-      const handicap = parseHc(document.getElementById('meHc').value);
+      const name = String(state.join.name || '').trim();
+      const handicap = parseHc(state.join.hc);
       if (!name || Number.isNaN(handicap) || handicap < -10 || handicap > 54) { state.error = 'Enter your name and a handicap between +10 and 54.'; render(); return; }
-      const grp = state.joinGrp || defaultJoinGroup();
+      const grp = state.joinGrp;
+      if (!grp) { state.error = 'Tap the group you\'re playing in, then Add me.'; render(); return; }
       if (groupCount(grp) >= MAX_GROUP) { state.error = `Group ${grp} is full — pick another.`; render(); return; }
       const { data, error } = await sb.from('players').insert({ round_id: state.round.id, name, handicap, grp }).select().single();
       if (error) { state.error = 'Couldn\'t add you — try again.'; render(); return; }
       if (!state.players.some(p => p.id === data.id)) state.players.push(data);
+      state.join = { name: '', hc: '' }; state.joinGrp = null;
       actions.pickMe({ dataset: { id: data.id } });
     },
     spectate() {
@@ -818,6 +826,15 @@
       state.openAdd = false;
       toast(`${name} added to Group ${grp}`, 'You can score for them on this screen.');
       render();
+    },
+    async moveMe(el) {
+      const g = +el.dataset.v, me = meP();
+      if (!me || g === grpOf(me)) return;
+      if (groupCount(g) >= MAX_GROUP) { toast(`Group ${g} is full`, '', 'blob'); return; }
+      const { error } = await sb.from('players').update({ grp: g }).eq('id', me.id);
+      if (error) { toast('Not moved', 'No signal? Try again.', 'blob'); return; }
+      me.grp = g; render();
+      toast(`You're in Group ${g}`, inGroup(g).length > 1 ? 'With ' + inGroup(g).filter(p => p.id !== me.id).map(p => p.name).join(', ') : 'Just you so far');
     },
     joinGrp(el) { state.joinGrp = +el.dataset.v; render(); },
     cardGrp(el) { state.cardGrp = el.dataset.v === 'all' ? 'all' : +el.dataset.v; render(); },
@@ -885,6 +902,8 @@
   // Form fields update state without re-rendering so typing isn't interrupted.
   $app.addEventListener('input', e => {
     const el = e.target, f = el.dataset && el.dataset.f;
+    if (f === 'meName') { state.join.name = el.value; return; }
+    if (f === 'meHc') { state.join.hc = el.value; return; }
     if (!f || !state.setup) return;
     const st = state.setup, i = +el.dataset.i;
     if (f === 'name') st.name = el.value;
