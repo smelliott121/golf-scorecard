@@ -340,3 +340,19 @@ select.input.grp { background-image: none; padding-right: 6px; }
 .hist .trophy { font-size: 15px; margin-right: -4px; }
 .hist .inplay { display: block; font-style: normal; font-size: 12px; color: var(--fairway); margin-top: 4px; }
 .item .hist .res b { font: 500 13px/1 var(--sans); color: var(--muted); }
+
+/* final result */
+.final { background: linear-gradient(180deg, #fbf6e6, var(--ivory)); border: 1px solid var(--brass); border-radius: var(--r-panel); padding: 16px; margin: 4px 0 14px; }
+.final-title { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.final-title .trophy { font-size: 24px; }
+.final-title b { font: 600 24px/1 var(--serif); flex: 1; }
+.final dl { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0; }
+.final dl div { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 12px; }
+.final dt { font-size: 12.5px; color: var(--muted); }
+.final dd { margin: 4px 0 2px; font: 600 20px/1.15 var(--serif); }
+.final dl span { font: 700 22px/1 var(--serif); font-variation-settings: "opsz" 6; }
+.final dl span small { display: inline; font: 500 13px/1 var(--sans); color: var(--muted); }
+.joinpanel .btn { margin: 10px 0 0; }
+.btn.finish { background: var(--brass); border-color: var(--brass); color: var(--club); font-weight: 600; }
+.editbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #fbf6e6; border: 1px solid var(--brass); border-radius: 14px; padding: 8px 8px 8px 14px; margin-bottom: 10px; font-size: 14px; }
+.editbar .btn { margin: 0; }

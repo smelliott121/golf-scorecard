@@ -74,7 +74,7 @@
     return s;
   }
   const keyOf = (pid, hole) => pid + ':' + hole;
-  const ROUND_COLS = 'id,code,name,course_name,holes,created_at';
+  const ROUND_COLS = 'id,code,name,course_name,holes,created_at,finished_at';
   function genToken() {
     const a = crypto.getRandomValues(new Uint8Array(24));
     return Array.from(a, x => x.toString(16).padStart(2, '0')).join('');
@@ -232,7 +232,8 @@
       state.meId = store.get('gs:me:' + res.round.id, null);
       if (state.meId && !state.players.some(p => p.id === state.meId)) state.meId = null;
       state.hole = nextHoleFor(state.meId);
-      state.tab = 'score';
+      state.tab = state.round.finished_at ? 'board' : 'score';
+      state.editFinished = false;
       rememberRound(res.round);
       history.replaceState(null, '', '?r=' + res.round.code);
       state.view = state.meId ? 'round' : 'who';
@@ -250,6 +251,9 @@
     try {
       const res = await fetchRound(state.round.code);
       if (!res) { const c = state.round.code; forgetRound(c); actions.home(); toast('Round deleted', `Round ${c} no longer exists.`); return; }
+      const wasFinished = !!state.round.finished_at;
+      state.round = Object.assign(state.round, res.round);
+      if (!wasFinished && state.round.finished_at) { state.tab = 'board'; toast('Round finished', 'The final result is in.', 'finish'); }
       state.players = res.players;
       const fresh = {};
       res.scores.forEach(s => { fresh[keyOf(s.player_id, s.hole)] = s.strokes; });
@@ -508,6 +512,16 @@
   }
 
   function renderScore() {
+    if (state.round.finished_at && !state.editFinished) {
+      return `
+      ${finalBanner()}
+      <div class="joinpanel">
+        <b>This round is finished</b>
+        <p>Scores are locked so nothing changes by accident.</p>
+        <button class="btn primary" data-a="tab" data-v="board">See the final leaderboard</button>
+        <button class="btn ghost" data-a="editFinished">Edit scores</button>
+      </div>`;
+    }
     const holes = state.round.holes;
     const h = holeByN(state.hole) || holes[0];
     const idx = holes.indexOf(h);
@@ -546,6 +560,7 @@
       </div>`;
     }).join('');
     return `
+      ${state.round.finished_at ? `<div class="editbar"><span>Editing a finished round</span><button class="btn sm" data-a="doneEditing">Done</button></div>` : ''}
       <section class="hole-hero">
         <div class="hh-top">
           <button class="hh-nav" data-a="prevHole" ${idx === 0 ? 'disabled' : ''} aria-label="Previous hole">‹</button>
@@ -581,7 +596,7 @@
           <button class="btn primary" data-a="addPartner">Add</button>
         </div>
       </details>` : `<p class="muted tip">Group ${mg} is a full four-ball.</p>`) : ''}
-      ${idx < holes.length - 1 ? `<button class="btn primary big next" data-a="nextHole">On to the ${S.ordinal(holes[idx + 1].n)}</button>` : `<button class="btn primary big next" data-a="tab" data-v="card">See the full card</button>`}
+      ${idx < holes.length - 1 ? `<button class="btn primary big next" data-a="nextHole">On to the ${S.ordinal(holes[idx + 1].n)}</button>` : state.round.finished_at ? `<button class="btn primary big next" data-a="doneEditing">Done editing</button>` : `<button class="btn primary big next finish" data-a="finishRound">Finish round</button>`}
       <p class="muted tip">Scores save as you tap and appear on everyone's phone.</p>
       <div class="sub-row"><h2 class="sub">Standings</h2><button class="link" data-a="tab" data-v="board">Full leaderboard</button></div>
       ${boardTable(board, true)}`;
@@ -638,6 +653,27 @@
       </div>`;
   }
 
+  // Net (default board) and gross winners, ties included.
+  function winners() {
+    const net = boardOf(mergedMap(), 'upfront').filter(r => r.thru);
+    const gross = boardOf(mergedMap(), 'gross').filter(r => r.thru);
+    const top = (rows, f) => { if (!rows.length) return null; const b = Math.min(...rows.map(f)); return { rows: rows.filter(r => f(r) === b), v: b }; };
+    return { net: top(net, r => r.upfront), gross: top(gross, r => r.grossToPar) };
+  }
+  function finalBanner() {
+    const w = winners();
+    if (!w.net) return '';
+    const names = t => t.rows.map(r => esc(r.player.name)).join(' & ');
+    return `
+      <div class="final">
+        <div class="final-title"><span class="trophy">🏆</span><b>Final result</b><small>${fmtDay(state.round.finished_at)}</small></div>
+        <dl>
+          <div><dt>Net winner</dt><dd>${names(w.net)}</dd><span class="${toParClass(w.net.v)}">${S.fmtToPar(w.net.v)}</span></div>
+          <div><dt>Gross winner</dt><dd>${names(w.gross)}</dd><span>${w.gross.rows[0].gross} <small>(${S.fmtToPar(w.gross.v)})</small></span></div>
+        </dl>
+      </div>`;
+  }
+
   function renderBoard() {
     const board = boardOf(mergedMap());
     const holes = state.round.holes;
@@ -645,8 +681,9 @@
     return `
       <div class="seg wide">${Object.keys(MODES).map(k => `<button class="${state.mode === k ? 'on' : ''}" data-a="mode" data-v="${k}">${MODES[k][0]}</button>`).join('')}</div>
       <p class="muted">${MODES[state.mode][1]}</p>
+      ${state.round.finished_at ? finalBanner() : ''}
       <div class="leaders">
-        <div class="leaders-title"><img src="radar.png" alt="Radar"><span>Leaders</span></div>
+        <div class="leaders-title"><img src="radar.png" alt="Radar"><span>${state.round.finished_at ? 'Final' : 'Leaders'}</span></div>
         ${boardTable(board, false)}
       </div>
       <div class="hb-wrap">
@@ -793,6 +830,7 @@
         ${perm === 'granted' ? t('notify', '') : `<button class="btn sm" data-a="enableNotify">Enable</button>`}
       </div>
       <h2>Round</h2>
+      ${state.round.finished_at ? `<button class="btn ghost" data-a="reopenRound">Reopen round for scoring</button>` : `<button class="btn ghost" data-a="finishRound">Finish round</button>`}
       <button class="btn ghost" data-a="changeMe">Change who I am</button>
       ${isOwner(state.round.code) ? `<button class="btn danger" data-a="deleteRound">Delete this round</button>` : ''}
       <button class="btn ghost" data-a="home">Leave round</button>
@@ -966,6 +1004,28 @@
       const hidden = store.get('gs:hidden', []); hidden.push(code); store.set('gs:hidden', hidden.slice(-30));
       render();
     },
+    async finishRound() {
+      const n = state.round.holes.length, m = mergedMap();
+      const missing = state.players.filter(p => state.round.holes.some(h => m[keyOf(p.id, h.n)] == null));
+      const msg = missing.length
+        ? `${missing.map(p => p.name).join(', ')} ${missing.length === 1 ? "hasn't" : "haven't"} finished all ${n} holes. Finish the round anyway?`
+        : 'Finish the round? Everyone will see the final result and scores will be locked.';
+      if (!confirm(msg)) return;
+      const { data, error } = await sb.rpc('finish_round', { p_code: state.round.code, p_finished: true });
+      if (error) { toast('Not finished', 'No signal? Try again.', 'blob'); return; }
+      state.round.finished_at = data || new Date().toISOString();
+      state.sheet = false; state.editFinished = false; state.tab = 'board';
+      render(); window.scrollTo(0, 0);
+      toast('Round finished', 'The final result is in.', 'finish');
+    },
+    async reopenRound() {
+      if (!confirm('Reopen the round so scores can be entered again?')) return;
+      const { error } = await sb.rpc('finish_round', { p_code: state.round.code, p_finished: false });
+      if (error) { toast('Not reopened', 'Try again.', 'blob'); return; }
+      state.round.finished_at = null; state.sheet = false; state.tab = 'score'; render();
+    },
+    editFinished() { state.editFinished = true; render(); },
+    doneEditing() { state.editFinished = false; state.tab = 'board'; render(); window.scrollTo(0, 0); },
     openSheet() { state.sheet = true; render(); },
     closeSheet() { state.sheet = false; render(); },
     viewPlayer(el) { state.viewPid = el.dataset.id; render(); },
