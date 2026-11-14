@@ -386,7 +386,7 @@
     return `
     <header class="hero">
       <img class="wordmark" src="radar.png" alt="Radar">
-      <div class="rule"><span></span><img src="goose.png" alt=""><span></span></div>
+      <div class="rule"><span></span><img src="goose.png?v=2" alt=""><span></span></div>
       <p>Live scores for your group, hole by hole.</p>
     </header>
     <main class="pad">
@@ -491,7 +491,7 @@
     return `
     <header class="bar">
       <button class="icon" data-a="home" aria-label="Home">‹</button>
-      <img class="bar-goose" src="goose.png" alt="">
+      <img class="bar-goose" src="goose.png?v=2" alt="">
       <div class="bar-t"><b>${esc(r.name || r.course_name)}</b><small><span class="dot ${state.live ? 'on' : ''}"></span>${state.live ? 'Live' : 'Connecting…'} · ${me ? 'Playing as ' + esc(me.name) : 'Watching'}</small></div>
       <button class="chip code-chip" data-a="share">${esc(r.code)}</button>
       <button class="icon" data-a="openSheet" aria-label="Settings">⚙︎</button>
