@@ -357,8 +357,25 @@
     }
   }
 
+  // This week's rounds come from the server, so every phone sees them whatever browser it used before.
+  async function loadServerRounds() {
+    try {
+      const since = new Date(Date.now() - 7 * 864e5).toISOString();
+      const { data, error } = await sb.from('rounds').select(ROUND_COLS).gte('created_at', since).order('created_at', { ascending: false }).limit(8);
+      if (error) return;
+      state.serverRounds = data || [];
+      if (state.view === 'home') render();
+    } catch (e) { /* offline: keep the phone's own list */ }
+  }
+  const fmtDay = d => new Date(d).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+
   function renderHome() {
-    const recent = store.get('gs:recent', []);
+    const local = store.get('gs:recent', []);
+    const server = (state.serverRounds || []).map(r => ({ code: r.code, name: r.name, course: r.course_name, date: fmtDay(r.created_at) }));
+    // server list first (it's authoritative), then anything older this phone remembers
+    const seen = new Set(server.map(r => r.code));
+    const hidden = new Set(store.get('gs:hidden', []));
+    const recent = server.concat(local.filter(r => !seen.has(r.code))).filter(r => !hidden.has(r.code)).slice(0, 8);
     return `
     <header class="hero">
       <img class="wordmark" src="radar.png" alt="Radar">
@@ -375,7 +392,7 @@
         </div>
       </div>
       ${state.error ? `<p class="err">${esc(state.error)}</p>` : ''}
-      ${recent.length ? `<h2 class="sub">Your recent rounds</h2>
+      ${recent.length ? `<h2 class="sub">Recent rounds</h2>
       <div class="list">${recent.map(r => `
         <div class="recent">
           <button class="item" data-a="open" data-code="${esc(r.code)}">
@@ -783,6 +800,7 @@
       state.view = 'home'; state.round = null; state.sheet = false; state.error = ''; state.live = false;
       history.replaceState(null, '', location.pathname);
       render();
+      loadServerRounds();
     },
     join() { openRound(document.getElementById('joinCode').value); },
     open(el) { openRound(el.dataset.code); },
@@ -937,7 +955,9 @@
     removeRecent(el) {
       const code = el.dataset.code;
       if (isOwner(code)) { actions.deleteRound(el); return; }
-      forgetRound(code); render();
+      forgetRound(code);
+      const hidden = store.get('gs:hidden', []); hidden.push(code); store.set('gs:hidden', hidden.slice(-30));
+      render();
     },
     openSheet() { state.sheet = true; render(); },
     closeSheet() { state.sheet = false; render(); },
@@ -1013,5 +1033,5 @@
 
   const code = new URLSearchParams(location.search).get('r');
   render();
-  if (code) openRound(code);
+  if (code) openRound(code); else loadServerRounds();
 })();
