@@ -784,6 +784,8 @@
       history.replaceState(null, '', location.pathname);
       render();
     },
+    join() { openRound(document.getElementById('joinCode').value); },
+    open(el) { openRound(el.dataset.code); },
     newRound() {
       state.error = '';
       state.setup = { name: '', players: [{ name: '', hc: '', grp: 1 }] };
