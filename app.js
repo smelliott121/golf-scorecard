@@ -479,7 +479,8 @@
          ['card', 'Card', '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/>']].map(([k, l, ic]) =>
         `<button class="${state.tab === k ? 'on' : ''}" data-a="tab" data-v="${k}" aria-current="${state.tab === k ? 'page' : 'false'}"><svg viewBox="0 0 24 24" aria-hidden="true">${ic}</svg><span>${l}</span></button>`).join('')}
     </nav>
-    ${state.sheet ? renderSheet() : ''}`;
+    ${state.sheet ? renderSheet() : ''}
+    ${state.viewPid ? renderPlayerCard(state.viewPid) : ''}`;
   }
 
   function renderScore() {
@@ -580,7 +581,7 @@
         const cls = state.mode === 'stableford' ? '' : toParClass(val);
         const shown = state.mode === 'stableford' ? String(r.points) : S.fmtToPar(val);
         return `
-        <div class="brow ${r.player.id === state.meId ? 'me' : ''}">
+        <div class="brow tap ${r.player.id === state.meId ? 'me' : ''}" data-a="viewPlayer" data-id="${r.player.id}" role="button" tabindex="0" aria-label="See ${esc(r.player.name)}'s card">
           <span class="pos">${r.thru ? r.posLabel : '–'}</span>
           <span class="pl"><b>${esc(r.player.name)}</b><small>HC ${fmtHc(r.player.handicap)}${groupNums().length > 1 ? ` · G${grpOf(r.player)}` : ''}${r.thru ? ` · Gross ${r.gross} (${S.fmtToPar(r.grossToPar)})` : ''}</small></span>
           <span class="thru">${r.finished ? 'F' : r.thru ? r.thru : '–'}</span>
@@ -695,6 +696,54 @@
         <p class="muted">${cg === 'all' ? 'New players go into the first group with space.' : `New players go into Group ${cg}.`}</p><div>
         </div>
       </div>`;
+  }
+
+  // One player's round, hole by hole, opened by tapping them on the leaderboard.
+  function renderPlayerCard(pid) {
+    const board = boardOf(mergedMap());
+    const r = board.find(x => x.player.id === pid);
+    if (!r) return '';
+    const p = r.player, holes = state.round.holes;
+    const row = ph => {
+      const h = holes.find(x => x.n === ph.hole);
+      const dots = ph.recv > 0 ? `<i class="dots">${'•'.repeat(Math.min(ph.recv, 3))}</i>` : '';
+      return `<tr><th>${ph.hole}</th><td class="mut">${h.par}</td><td class="mut">${h.si}</td>
+        <td>${dots}<span class="mark ${scoreClass(ph.strokes, h.par)}">${ph.strokes != null ? ph.strokes : ''}</span></td>
+        <td class="mut">${ph.strokes != null ? ph.net : ''}</td><td class="mut">${ph.strokes != null ? ph.pts : ''}</td></tr>`;
+    };
+    const tot = (label, list) => {
+      const played = list.filter(x => x.strokes != null);
+      const g = played.reduce((a, x) => a + x.strokes, 0), n = played.reduce((a, x) => a + x.net, 0), pt = played.reduce((a, x) => a + x.pts, 0);
+      return `<tr class="tot"><th>${label}</th><td class="mut">${list.reduce((a, x) => a + x.par, 0)}</td><td></td><td>${played.length ? g : ''}</td><td>${played.length ? n : ''}</td><td>${played.length ? pt : ''}</td></tr>`;
+    };
+    const front = r.perHole.filter(x => x.hole <= 9), back = r.perHole.filter(x => x.hole > 9);
+    const stat = (label, v, cls) => `<div><dt>${label}</dt><dd class="${cls || ''}">${v}</dd></div>`;
+    return `
+    <div class="scrim" data-a="closePlayer"></div>
+    <div class="sheet pcard" role="dialog" aria-label="${esc(p.name)}'s card">
+      <div class="grab"></div>
+      <div class="pc-head">
+        <div><b>${esc(p.name)}</b><small>HC ${fmtHc(p.handicap)} · Group ${grpOf(p)} · ${r.finished ? 'Finished' : r.thru ? 'Thru ' + r.thru : 'Not started'}</small></div>
+        <button class="icon sm" data-a="closePlayer" aria-label="Close">✕</button>
+      </div>
+      <dl class="pc-stats">
+        ${stat('Gross', r.thru ? `${r.gross} <small>${S.fmtToPar(r.grossToPar)}</small>` : '–', '')}
+        ${stat('Net', r.thru ? S.fmtToPar(r.upfront) : '–', r.thru ? toParClass(r.upfront) : '')}
+        ${stat('Points', r.thru ? r.points : '–', '')}
+        ${stat('Position', r.thru ? r.posLabel : '–', '')}
+      </dl>
+      <div class="cardwrap">
+        <table class="sc-table">
+          <thead><tr><th>Hole</th><th>Par</th><th>SI</th><th class="pn">Score</th><th>Net</th><th>Pts</th></tr></thead>
+          <tbody>
+            ${front.map(row).join('')}
+            ${back.length ? tot('Out', front) + back.map(row).join('') + tot('In', back) : ''}
+            ${tot('Total', r.perHole)}
+          </tbody>
+        </table>
+      </div>
+      <p class="muted" style="margin-top:10px">Gold dots are the shots ${esc(p.name.split(' ')[0])} gets. Position is on the ${MODES[state.mode][0]} board.</p>
+    </div>`;
   }
 
   function renderSheet() {
@@ -890,6 +939,8 @@
     },
     openSheet() { state.sheet = true; render(); },
     closeSheet() { state.sheet = false; render(); },
+    viewPlayer(el) { state.viewPid = el.dataset.id; render(); },
+    closePlayer() { state.viewPid = null; render(); },
     enableNotify() { enableNotifications(); }
   };
 
@@ -941,7 +992,9 @@
   });
 
   $app.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && state.viewPid) { actions.closePlayer(); return; }
     if (e.key !== 'Enter') return;
+    if (e.target.dataset && e.target.dataset.a === 'viewPlayer') { actions.viewPlayer(e.target); return; }
     if (e.target.id === 'joinCode') actions.join();
     else if (e.target.id === 'meHc' || e.target.id === 'meName') actions.addMe();
     else if (e.target.id === 'addHc' || e.target.id === 'addName') actions.addPlayer();

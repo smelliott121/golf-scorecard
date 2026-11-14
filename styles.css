@@ -315,3 +315,19 @@ select.input.grp { background-image: none; padding-right: 6px; }
 .joinpanel b { display: block; font: 600 21px/1.2 var(--serif); }
 .joinpanel p { color: var(--muted); font-size: 14px; margin: 6px 0 4px; }
 .seg.wide button { padding: 9px 6px; font-size: 14.5px; white-space: nowrap; }
+
+/* player card */
+.brow.tap { cursor: pointer; }
+.brow.tap:active { background: #eef0e9; }
+.pcard { max-height: 92vh; padding-bottom: calc(24px + var(--safe-b)); }
+.pc-head { display: flex; align-items: flex-start; justify-content: space-between; margin: 12px 0 10px; }
+.pc-head b { display: block; font: 600 26px/1.15 var(--serif); }
+.pc-stats { display: grid; grid-template-columns: repeat(4, 1fr); margin: 0 0 14px; background: var(--club); border-radius: 16px; padding: 12px 4px; color: var(--ivory); }
+.pc-stats div { text-align: center; border-left: 1px solid rgba(179, 149, 86, .35); }
+.pc-stats div:first-child { border-left: 0; }
+.pc-stats dt { font-size: 12px; color: rgba(251, 250, 245, .6); }
+.pc-stats dd { margin: 3px 0 0; font: 700 22px/1 var(--serif); font-variation-settings: "opsz" 6; }
+.pc-stats dd small { display: inline; font: 500 13px/1 var(--sans); color: rgba(251, 250, 245, .65); }
+.pc-stats dd.under { color: #f1a3a3; } .pc-stats dd.over { color: #9fd9bb; } .pc-stats dd.even { color: var(--ivory); }
+.pcard .sc-table thead .pn { font: 500 12px/1 var(--sans); text-transform: none; color: var(--muted); }
+.pcard .dots { font-size: 18px; top: 50%; transform: translateY(-50%); right: auto; left: calc(50% + 22px); }
