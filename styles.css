@@ -331,3 +331,12 @@ select.input.grp { background-image: none; padding-right: 6px; }
 .pc-stats dd.under { color: #f1a3a3; } .pc-stats dd.over { color: #9fd9bb; } .pc-stats dd.even { color: var(--ivory); }
 .pcard .sc-table thead .pn { font: 500 12px/1 var(--sans); text-transform: none; color: var(--muted); }
 .pcard .dots { font-size: 18px; top: 50%; transform: translateY(-50%); right: auto; left: calc(50% + 22px); }
+
+/* round history */
+.hist { min-width: 0; }
+.hist .res { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; margin-top: 6px; font-size: 14px; color: var(--ink); }
+.hist .res b { font-weight: 500; color: var(--muted); margin-right: 3px; }
+.hist .res .under, .hist .res .over, .hist .res .even { font: 700 15px/1 var(--serif); font-variation-settings: "opsz" 6; }
+.hist .trophy { font-size: 15px; margin-right: -4px; }
+.hist .inplay { display: block; font-style: normal; font-size: 12px; color: var(--fairway); margin-top: 4px; }
+.item .hist .res b { font: 500 13px/1 var(--sans); color: var(--muted); }

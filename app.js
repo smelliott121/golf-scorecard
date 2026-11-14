@@ -360,8 +360,7 @@
   // This week's rounds come from the server, so every phone sees them whatever browser it used before.
   async function loadServerRounds() {
     try {
-      const since = new Date(Date.now() - 7 * 864e5).toISOString();
-      const { data, error } = await sb.from('rounds').select(ROUND_COLS).gte('created_at', since).order('created_at', { ascending: false }).limit(8);
+      const { data, error } = await sb.rpc('round_history', { p_limit: 40 });
       if (error) return;
       state.serverRounds = data || [];
       if (state.view === 'home') render();
@@ -371,11 +370,19 @@
 
   function renderHome() {
     const local = store.get('gs:recent', []);
-    const server = (state.serverRounds || []).map(r => ({ code: r.code, name: r.name, course: r.course_name, date: fmtDay(r.created_at) }));
+    const server = (state.serverRounds || []).map(r => ({ code: r.code, name: r.name, course: r.course_name, date: fmtDay(r.created_at), res: r }));
     // server list first (it's authoritative), then anything older this phone remembers
     const seen = new Set(server.map(r => r.code));
     const hidden = new Set(store.get('gs:hidden', []));
-    const recent = server.concat(local.filter(r => !seen.has(r.code))).filter(r => !hidden.has(r.code)).slice(0, 8);
+    const recent = server.concat(local.filter(r => !seen.has(r.code))).filter(r => !hidden.has(r.code)).slice(0, 40);
+    const result = x => {
+      if (!x || !x.players) return '';
+      if (x.net_names == null) return `<span class="res muted">${x.players} player${x.players === 1 ? '' : 's'} · not started</span>`;
+      const done = x.finished >= x.players;
+      const label = done ? '' : `<em class="inplay">In play · ${x.finished}/${x.players} finished</em>`;
+      return `${label}<span class="res"><span class="trophy" aria-hidden="true">${done ? '🏆' : '⛳'}</span><span><b>Net</b> ${esc(x.net_names)} <span class="${toParClass(x.net_score)}">${S.fmtToPar(x.net_score)}</span></span>
+        <span><b>Gross</b> ${esc(x.gross_names)} ${x.gross_total} <span class="muted">(${S.fmtToPar(x.gross_to_par)})</span></span></span>`;
+    };
     return `
     <header class="hero">
       <img class="wordmark" src="radar.png" alt="Radar">
@@ -392,11 +399,11 @@
         </div>
       </div>
       ${state.error ? `<p class="err">${esc(state.error)}</p>` : ''}
-      ${recent.length ? `<h2 class="sub">Recent rounds</h2>
+      ${recent.length ? `<h2 class="sub">Round history</h2>
       <div class="list">${recent.map(r => `
         <div class="recent">
           <button class="item" data-a="open" data-code="${esc(r.code)}">
-            <div><b>${esc(r.name || r.course)}</b><small>${esc(r.date)} · code ${esc(r.code)}${isOwner(r.code) ? ' · you started it' : ''}</small></div>
+            <div class="hist"><b>${esc(r.name || r.course)}</b><small>${esc(r.date)}${r.name ? ' · ' + esc(r.course) : ''} · code ${esc(r.code)}${isOwner(r.code) ? ' · yours' : ''}</small>${result(r.res)}</div>
             <span class="chev" aria-hidden="true">›</span>
           </button>
           <button class="icon sm" data-a="removeRecent" data-code="${esc(r.code)}" aria-label="${isOwner(r.code) ? 'Delete' : 'Remove'} round ${esc(r.code)}">✕</button>
