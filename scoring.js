@@ -35,7 +35,7 @@
       const pts = Math.max(0, 2 + h.par - net);
       points += pts;
       // running totals after this hole, one per leaderboard mode
-      const run = { upfront: grossToPar - player.handicap, index: netByIndex, stableford: points };
+      const run = { upfront: grossToPar - player.handicap, index: netByIndex, stableford: points, gross: grossToPar };
       return { hole: h.n, par: h.par, recv, strokes: s, net, pts, run };
     });
     return {
@@ -49,6 +49,7 @@
   function sortKey(row, mode) {
     if (mode === 'stableford') return -row.points;
     if (mode === 'index') return row.netByIndex;
+    if (mode === 'gross') return row.grossToPar;
     return row.upfront;
   }
 
@@ -78,7 +79,7 @@
 
   function scoreText(row, mode) {
     if (mode === 'stableford') return row.points + ' pts';
-    return fmtToPar(mode === 'index' ? row.netByIndex : row.upfront);
+    return fmtToPar(mode === 'index' ? row.netByIndex : mode === 'gross' ? row.grossToPar : row.upfront);
   }
 
   function scoreName(strokes, par) {

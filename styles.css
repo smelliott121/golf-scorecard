@@ -314,3 +314,4 @@ select.input.grp { background-image: none; padding-right: 6px; }
 .joinpanel { background: var(--ivory); border: 1px solid var(--brass); border-radius: var(--r-panel); padding: 18px; text-align: center; }
 .joinpanel b { display: block; font: 600 21px/1.2 var(--serif); }
 .joinpanel p { color: var(--muted); font-size: 14px; margin: 6px 0 4px; }
+.seg.wide button { padding: 9px 6px; font-size: 14.5px; white-space: nowrap; }

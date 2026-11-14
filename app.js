@@ -502,7 +502,7 @@
       const recv = S.strokesReceived(p.handicap, ranks[idx], holes.length);
       const row = board.find(b => b.player.id === p.id);
       const shots = recv > 0 ? `<span class="shots" aria-hidden="true">${'●'.repeat(Math.min(recv, 4))}</span>${recv} shot${recv > 1 ? 's' : ''} here` : recv < 0 ? `Gives ${-recv} back` : 'No shot here';
-      const runV = row && row.thru ? (state.mode === 'stableford' ? row.points : state.mode === 'index' ? row.netByIndex : row.upfront) : null;
+      const runV = row && row.thru ? (state.mode === 'stableford' ? row.points : state.mode === 'index' ? row.netByIndex : state.mode === 'gross' ? row.grossToPar : row.upfront) : null;
       return `
       <div class="entry">
         <div class="who">
@@ -565,7 +565,8 @@
   const MODES = {
     upfront: ['Net', 'Everyone starts on minus their handicap; each hole adds your gross score against par.'],
     index: ['Net by SI', 'Shots are taken on each hole by stroke index — the fairest picture mid-round.'],
-    stableford: ['Stableford', 'Points per hole using your shots: 2 for net par, 3 net birdie, and so on.']
+    stableford: ['Stableford', 'Points per hole using your shots: 2 for net par, 3 net birdie, and so on.'],
+    gross: ['Gross', 'Strokes against par with no handicap: the scratch leaderboard.']
   };
 
   function boardTable(board, compact) {
@@ -575,7 +576,7 @@
     <div class="board ${compact ? 'compact' : ''}">
       <div class="brow head"><span>Pos</span><span>Player</span><span>Thru</span><span>${state.mode === 'stableford' ? 'Pts' : 'Score'}</span></div>
       ${board.map(r => {
-        const val = state.mode === 'stableford' ? r.points : state.mode === 'index' ? r.netByIndex : r.upfront;
+        const val = state.mode === 'stableford' ? r.points : state.mode === 'index' ? r.netByIndex : state.mode === 'gross' ? r.grossToPar : r.upfront;
         const cls = state.mode === 'stableford' ? '' : toParClass(val);
         const shown = state.mode === 'stableford' ? String(r.points) : S.fmtToPar(val);
         return `
