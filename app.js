@@ -87,13 +87,26 @@
     return Array.from({ length: n }, (_, i) => ({ n: i + 1, par: 4, si: '' }));
   }
   const holeByN = n => state.round.holes.find(h => h.n === n);
-  // The course is fixed to Wheatlands for now (par, stroke index and yards from the club card).
-  const COURSE = {
-    name: 'Wheatlands',
-    holes: [[18, 125], [15, 126], [8, 167], [1, 195], [13, 162], [11, 150], [4, 170], [2, 183], [9, 149],
-            [17, 141], [16, 110], [5, 179], [6, 143], [14, 132], [10, 174], [7, 139], [12, 131], [3, 191]]
-      .map(([si, y], i) => ({ n: i + 1, par: 3, si, y }))
-  };
+  // Courses, from the clubs' own scorecards. Nine-hole courses list holes 1-18 because they're played twice.
+  // cr/slope are kept for handicap work later.
+  const nineTwice = (par, si1, si2, y) => par.concat(par).map((pr, i) => ({ n: i + 1, par: pr, si: (i < 9 ? si1 : si2)[i % 9], y: y[i % 9] }));
+  const COURSES = [
+    { id: 'wheatlands', name: 'Wheatlands', note: 'The nine played twice', tees: [
+      { id: 'std', name: 'Standard', holes: [[18, 125], [15, 126], [8, 167], [1, 195], [13, 162], [11, 150], [4, 170], [2, 183], [9, 149],
+        [17, 141], [16, 110], [5, 179], [6, 143], [14, 132], [10, 174], [7, 139], [12, 131], [3, 191]].map(([si, y], i) => ({ n: i + 1, par: 3, si, y })) }
+    ] },
+    { id: 'stclement', name: 'St Clement', note: 'The nine played twice', tees: [
+      { id: 'white', name: 'White', cr: 66.4, slope: 107, holes: nineTwice([4, 5, 3, 4, 3, 3, 4, 3, 4], [3, 13, 7, 15, 17, 11, 1, 9, 5], [4, 14, 8, 16, 18, 12, 2, 10, 6], [445, 472, 196, 278, 134, 162, 350, 178, 422]) },
+      { id: 'yellow', name: 'Yellow', cr: 65.6, slope: 107, holes: nineTwice([4, 5, 3, 4, 3, 3, 4, 3, 4], [3, 13, 7, 15, 17, 11, 1, 9, 5], [4, 14, 8, 16, 18, 12, 2, 10, 6], [445, 463, 196, 278, 134, 162, 337, 178, 392]) },
+      { id: 'red', name: 'Red', cr: 69.8, slope: 120, holes: nineTwice([5, 5, 3, 4, 3, 3, 4, 3, 5], [5, 3, 11, 13, 17, 15, 1, 9, 7], [6, 4, 12, 14, 18, 16, 2, 10, 8], [445, 463, 196, 278, 134, 162, 320, 178, 392]) }
+    ] }
+  ];
+  const courseById = id => COURSES.find(c => c.id === id) || COURSES[0];
+  // On a 9-hole round everyone plays off half their handicap (rounded), as WHS does for nine holes.
+  const isNine = () => !!(state.round && state.round.holes.length <= 9);
+  // "HC 18" normally; "HC 18 · plays 9" on a 9-hole round. Works for raw players and board rows.
+  const hcLabel = p => { const full = p.fullHc != null ? p.fullHc : p.handicap; return `HC ${fmtHc(full)}${isNine() ? ` · plays ${fmtHc(Math.floor(full / 2 + 0.5))}` : ''}`; };
+  const playHc = p => (state.round && state.round.holes.length <= 9 ? Math.floor(p.handicap / 2 + 0.5) : p.handicap);
   const MAX_GROUP = 4;
   const grpOf = p => p.grp || 1;
   const groupNums = () => [...new Set(state.players.map(grpOf))].sort((a, b) => a - b);
@@ -133,7 +146,7 @@
     }
     return m;
   }
-  const boardOf = (map, mode) => S.leaderboard(state.players, state.round.holes, scoresFrom(map), mode || state.mode);
+  const boardOf = (map, mode) => S.leaderboard(state.players.map(p => Object.assign({}, p, { handicap: playHc(p), fullHc: p.handicap })), state.round.holes, scoresFrom(map), mode || state.mode);
 
   function scoreClass(strokes, par) {
     if (strokes == null) return '';
@@ -424,10 +437,24 @@
         <label class="lbl">Round name <span class="muted">(optional)</span></label>
         <input class="input" data-f="name" placeholder="Saturday medal" value="${esc(st.name)}">
       </div>
-      <div class="course-fixed">
-        <div><b>${esc(COURSE.name)}</b><small>18 holes · the nine played twice</small></div>
-        <dl><div><dt>Par</dt><dd>${parTotal(COURSE.holes)}</dd></div><div><dt>Yards</dt><dd>${COURSE.holes.reduce((a, h) => a + h.y, 0).toLocaleString('en-GB')}</dd></div></dl>
+      ${(() => {
+        const c = courseById(st.course), t = c.tees.find(x => x.id === st.tee) || c.tees[0];
+        const hs = st.nine ? t.holes.slice(0, 9) : t.holes;
+        return `
+      <div class="card">
+        <label class="lbl">Course</label>
+        <div class="gchips">${COURSES.map(x => `<button type="button" class="gchip ${x.id === c.id ? 'on' : ''}" data-a="pickCourse" data-v="${x.id}">${esc(x.name)}<small>${x.tees.length > 1 ? x.tees.length + ' tees' : 'Par ' + parTotal(x.tees[0].holes)}</small></button>`).join('')}</div>
+        ${c.tees.length > 1 ? `<label class="lbl mt">Tees</label>
+        <div class="seg wide">${c.tees.map(x => `<button type="button" class="${x.id === t.id ? 'on' : ''}" data-a="pickTee" data-v="${x.id}">${esc(x.name)}</button>`).join('')}</div>` : ''}
+        <label class="lbl mt">Holes</label>
+        <div class="seg wide"><button type="button" class="${!st.nine ? 'on' : ''}" data-a="pickNine" data-v="0">18 holes</button><button type="button" class="${st.nine ? 'on' : ''}" data-a="pickNine" data-v="1">9 holes</button></div>
+        ${st.nine ? '<p class="muted" style="margin:0">Everyone plays off half their handicap for 9 holes. Enter normal handicaps below.</p>' : ''}
       </div>
+      <div class="course-fixed">
+        <div><b>${esc(c.name)}</b><small>${t.cr ? esc(t.name) + ' tees · ' : ''}${st.nine ? '9 holes' : '18 holes · ' + esc(c.note.toLowerCase())}</small></div>
+        <dl><div><dt>Par</dt><dd>${parTotal(hs)}</dd></div><div><dt>Yards</dt><dd>${hs.reduce((a, h) => a + h.y, 0).toLocaleString('en-GB')}</dd></div></dl>
+      </div>`;
+      })()}
       <div class="card">
         <label class="lbl">Your name and handicap</label>
         ${st.players.map((p, i) => `
@@ -538,7 +565,7 @@
     }).join('');
     const rows = list.map(p => {
       const v = m[keyOf(p.id, h.n)];
-      const recv = S.strokesReceived(p.handicap, ranks[idx], holes.length);
+      const recv = S.strokesReceived(playHc(p), ranks[idx], holes.length);
       const row = board.find(b => b.player.id === p.id);
       const shots = recv > 0 ? `<span class="shots" aria-hidden="true">${'●'.repeat(Math.min(recv, 4))}</span>${recv} shot${recv > 1 ? 's' : ''} here` : recv < 0 ? `Gives ${-recv} back` : 'No shot here';
       const runV = row && row.thru ? (state.mode === 'stableford' ? row.points : state.mode === 'index' ? row.netByIndex : state.mode === 'gross' ? row.grossToPar : row.upfront) : null;
@@ -546,7 +573,7 @@
       <div class="entry">
         <div class="who">
           <b>${esc(p.name)}</b>
-          <small>HC ${fmtHc(p.handicap)} <span class="sep"></span> ${shots}</small>
+          <small>${hcLabel(p)} <span class="sep"></span> ${shots}</small>
           <small class="run">${row && row.thru ? `<span class="${state.mode === 'stableford' ? '' : toParClass(runV)}">${S.scoreText(row, state.mode)}</span> after ${row.thru}` : 'Not started'}</small>
         </div>
         <div class="stepper">
@@ -622,7 +649,7 @@
         return `
         <div class="brow tap ${r.player.id === state.meId ? 'me' : ''}" data-a="viewPlayer" data-id="${r.player.id}" role="button" tabindex="0" aria-label="See ${esc(r.player.name)}'s card">
           <span class="pos">${r.thru ? r.posLabel : '–'}</span>
-          <span class="pl"><b>${esc(r.player.name)}</b><small>HC ${fmtHc(r.player.handicap)}${groupNums().length > 1 ? ` · G${grpOf(r.player)}` : ''}${r.thru ? ` · Gross ${r.gross} (${S.fmtToPar(r.grossToPar)})` : ''}</small></span>
+          <span class="pl"><b>${esc(r.player.name)}</b><small>${hcLabel(r.player)}${groupNums().length > 1 ? ` · G${grpOf(r.player)}` : ''}${r.thru ? ` · Gross ${r.gross} (${S.fmtToPar(r.grossToPar)})` : ''}</small></span>
           <span class="thru">${r.finished ? 'F' : r.thru ? r.thru : '–'}</span>
           <span class="sc ${cls}">${shown}</span>
         </div>`;
@@ -713,7 +740,7 @@
       const rank = ranks[holes.indexOf(h)];
       return `<tr><th>${h.n}</th><td class="mut">${h.par}</td><td class="mut">${h.si}</td>${ps.map(p => {
         const v = m[keyOf(p.id, h.n)];
-        const recv = S.strokesReceived(p.handicap, rank, holes.length);
+        const recv = S.strokesReceived(playHc(p), rank, holes.length);
         const dots = recv > 0 ? `<i class="dots">${'•'.repeat(Math.min(recv, 3))}</i>` : '';
         return `<td>${dots}<span class="mark ${scoreClass(v, h.par)}">${v != null ? v : ''}</span></td>`;
       }).join('')}</tr>`;
@@ -784,7 +811,7 @@
     <div class="sheet pcard" role="dialog" aria-label="${esc(p.name)}'s card">
       <div class="grab"></div>
       <div class="pc-head">
-        <div><b>${esc(p.name)}</b><small>HC ${fmtHc(p.handicap)} · Group ${grpOf(p)} · ${r.finished ? 'Finished' : r.thru ? 'Thru ' + r.thru : 'Not started'}</small></div>
+        <div><b>${esc(p.name)}</b><small>${hcLabel(p)} · Group ${grpOf(p)} · ${r.finished ? 'Finished' : r.thru ? 'Thru ' + r.thru : 'Not started'}</small></div>
         <button class="icon sm" data-a="closePlayer" aria-label="Close">✕</button>
       </div>
       <dl class="pc-stats">
@@ -851,16 +878,22 @@
     open(el) { openRound(el.dataset.code); },
     newRound() {
       state.error = '';
-      state.setup = { name: '', players: [{ name: '', hc: '', grp: 1 }] };
+      const last = store.get('gs:lastCourse', {});
+      state.setup = { name: '', course: last.course || COURSES[0].id, tee: last.tee || null, nine: false, players: [{ name: '', hc: '', grp: 1 }] };
       state.view = 'setup'; render();
     },
+    pickCourse(el) { state.setup.course = el.dataset.v; state.setup.tee = null; render(); },
+    pickTee(el) { state.setup.tee = el.dataset.v; render(); },
+    pickNine(el) { state.setup.nine = el.dataset.v === '1'; render(); },
     addSetupPlayer() { const n = state.setup.players.length; state.setup.players.push({ name: '', hc: '', grp: Math.floor(n / MAX_GROUP) + 1 }); render(); },
     rmSetupPlayer(el) { state.setup.players.splice(+el.dataset.i, 1); render(); },
     async startRound() {
       const st = state.setup;
       state.error = '';
-      const cname = COURSE.name;
-      const holes = COURSE.holes.map(h => Object.assign({}, h));
+      const c = courseById(st.course), t = c.tees.find(x => x.id === st.tee) || c.tees[0];
+      const cname = c.name + (c.tees.length > 1 ? ` (${t.name})` : '') + (st.nine ? ' · 9 holes' : '');
+      const holes = (st.nine ? t.holes.slice(0, 9) : t.holes).map(h => Object.assign({}, h, t.cr ? { cr: t.cr, slope: t.slope } : {}));
+      store.set('gs:lastCourse', { course: c.id, tee: t.id });
       const players = st.players.map(p => ({ name: String(p.name || '').trim(), handicap: parseHc(p.hc), grp: Number(p.grp) || 1 })).filter(p => p.name || !Number.isNaN(p.handicap));
       if (!players.length) state.error = 'Add at least one player.';
       else if (players.some(p => !p.name)) state.error = 'Every player needs a name.';
